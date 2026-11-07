@@ -417,7 +417,9 @@ class VpiStereo : public rclcpp::Node {
       return;
     }
     const auto t_depth = std::chrono::steady_clock::now();
-    auto out = std::make_unique<Image>();
+    // One depth message reused for every pair: publish(const&) serializes it straight away (no intra-process), and a
+    // fresh 1 MB buffer per frame would be a new mmap whose pages all fault in while the loop below writes them.
+    Image* out = &depth_msg_;
     out->header.stamp = l.header.stamp;
     out->header.frame_id = frame_;
     out->width = w_;
@@ -464,7 +466,7 @@ class VpiStereo : public rclcpp::Node {
     ci->distortion_model = "plumb_bob";
     ci->d = {0.0, 0.0, 0.0, 0.0, 0.0};
     const auto t_pub = std::chrono::steady_clock::now();
-    pub_->publish(std::move(out));
+    pub_->publish(*out);
     pub_info_->publish(std::move(ci));
     times_.add("5 publish depth", ms_since(t_pub));
     times_.add("6 match total", ms_since(t0));
@@ -488,7 +490,8 @@ class VpiStereo : public rclcpp::Node {
   double fx_ = 0, cx_ = 0, cy_ = 0, baseline_ = 0;
   std::string frame_;
   std::vector<float> depth_lut_;                           // raw S16 disparity bits -> metres (NaN = invalid)
-  int64_t rect_stamp_[2] = {-1, -1};                       // stamp (ns) of the image in in8_l_ / in8_r_, -1 = none
+  int64_t rect_stamp_[2] = {-1, -1};
+  Image depth_msg_;                                        // the published depth image, reused                       // stamp (ns) of the image in in8_l_ / in8_r_, -1 = none
   cv::Mat m1x_, m1y_, m2x_, m2y_;                          // CV_16SC2 + CV_16UC1 remap maps
   VPIStream stream_ = nullptr;
   VPIPayload payload_ = nullptr;
