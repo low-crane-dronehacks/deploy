@@ -41,6 +41,7 @@ from . import handheld as H
 from . import obs as O
 from .node import decode_depth
 from .policy_np import NumpyPolicy, resolve_policy
+from .transport import LATEST
 
 PX4_QOS = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, durability=DurabilityPolicy.TRANSIENT_LOCAL,
                      history=HistoryPolicy.KEEP_LAST, depth=1)
@@ -73,7 +74,7 @@ class Handheld(Node):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.create_subscription(CameraInfo, info_topic, self._on_info, qos_profile_sensor_data)
-        self.create_subscription(Image, self.depth_topic, self._on_depth, qos_profile_sensor_data)
+        self.create_subscription(Image, self.depth_topic, self._on_depth, LATEST)
         self.create_subscription(Empty, '/policynav/handheld/reset', lambda _m: self._reset('reset topic'), 10)
         self.pos = self.vel = None
         self.q = None
@@ -87,7 +88,7 @@ class Handheld(Node):
             self.create_subscription(DistanceSensor, '/fmu/out/distance_sensor', self._on_range, PX4_QOS)
         elif self.state_source == 'odom':
             from nav_msgs.msg import Odometry
-            self.create_subscription(Odometry, dp('odom_topic', '/visual_slam/tracking/odometry'), self._on_odom, 10)
+            self.create_subscription(Odometry, dp('odom_topic', '/visual_slam/tracking/odometry'), self._on_odom, LATEST)
         elif self.state_source != 'none':
             raise ValueError(f"state_source must be px4 | odom | none, got {self.state_source!r}")
 
