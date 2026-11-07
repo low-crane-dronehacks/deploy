@@ -92,7 +92,7 @@ class VpiStereo : public rclcpp::Node {
     VPIImageData d;
     VPI_CHECK(vpiImageLockData(dst, VPI_LOCK_WRITE, VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR, &d));
     const auto& pl = d.buffer.pitch.planes[0];
-    auto* base = static_cast<uint8_t*>(pl.pBase);
+    auto* base = static_cast<uint8_t*>(pl.data);
     for (int y = 0; y < h_; ++y) std::memcpy(base + y * pl.pitchBytes, m.data.data() + y * m.step, w_);
     VPI_CHECK(vpiImageUnlock(dst));
   }
@@ -150,8 +150,8 @@ class VpiStereo : public rclcpp::Node {
     const auto& cpl = cd.buffer.pitch.planes[0];
     size_t valid = 0;
     for (int y = 0; y < h_; ++y) {
-      const auto* drow = reinterpret_cast<const int16_t*>(static_cast<const uint8_t*>(dp.pBase) + y * dp.pitchBytes);
-      const auto* crow = reinterpret_cast<const uint16_t*>(static_cast<const uint8_t*>(cpl.pBase) + y * cpl.pitchBytes);
+      const auto* drow = reinterpret_cast<const int16_t*>(static_cast<const uint8_t*>(dp.data) + y * dp.pitchBytes);
+      const auto* crow = reinterpret_cast<const uint16_t*>(static_cast<const uint8_t*>(cpl.data) + y * cpl.pitchBytes);
       for (int x = 0; x < w_; ++x) {
         float d = drow[x] / 32.0f;                              // S16 Q10.5
         if (integer_) d = std::floor(d + 0.5f);
