@@ -36,7 +36,8 @@ find_package(Eigen3 REQUIRED NO_MODULE)
 add_library(policynav_core STATIC
   src/policy/npz.cpp
   src/policy/obs.cpp
-  src/policy/decision_gate.cpp)
+  src/policy/decision_gate.cpp
+  src/policy/policy.cpp)
 # obs.cpp mirrors NumPy's float64 operation order (floor() bin decisions): no fused multiply-adds there.
 set_source_files_properties(src/policy/obs.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
 set_target_properties(policynav_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
