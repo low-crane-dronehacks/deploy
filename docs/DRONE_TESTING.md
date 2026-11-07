@@ -134,9 +134,53 @@ To have it start with the stack, set these in `/etc/skybeta/drone.env` and resta
 
 Same pilot procedure as section 5. Handheld bench (section 3) first.
 
-## 7. Moving code off the drone
+## 7. Watching it live: Foxglove on your laptop
 
-The drone has no GitHub credentials. Export a branch for someone to push from another machine:
+`foxglove_bridge` is already in the skybeta image. Run it on the drone in a throwaway container. It joins the
+drone's local DDS domain, so `drone.env` does not change and the stack does not restart.
+
+```bash
+docker run --rm --network host --ipc host -e ROS_DOMAIN_ID=17 -e RMW_IMPLEMENTATION=rmw_fastrtps_cpp \
+  -v ~/skybeta/host/dds/fastdds_localhost.xml:/etc/skybeta/fastdds.xml:ro \
+  -e FASTRTPS_DEFAULT_PROFILES_FILE=/etc/skybeta/fastdds.xml -e FASTDDS_DEFAULT_PROFILES_FILE=/etc/skybeta/fastdds.xml \
+  skybeta:0.3.2 bash -c "source /opt/ros/humble/setup.bash; ros2 launch foxglove_bridge foxglove_bridge_launch.xml \
+    port:=8766 capabilities:='[connectionGraph]'"
+```
+
+- **Port 8766, not Foxglove's default 8765.** 8765 is taken on the Tailscale address by the organizers' status
+  agent (`/opt/skybeta-status`), which we must not disturb.
+- **`capabilities:='[connectionGraph]'` makes it view-only.** The laptop cannot publish topics, set parameters or
+  call services. With the defaults, a stray click could send a setpoint.
+
+On the laptop:
+1. Open the Foxglove app (or app.foxglove.dev).
+2. Choose Open connection, then Foxglove WebSocket.
+3. Connect to one of:
+   - `ws://192.168.55.1:8766` (USB cable)
+   - `ws://100.110.105.30:8766` (Tailscale, drone 17)
+   - the drone's Wi-Fi IP
+
+Useful panels:
+
+| Panel | Topic | Shows |
+|---|---|---|
+| Log | `/rosout` | Every node's log, including the dry run's `DRY RUN would ...` plan line |
+| Plot | `/visual_slam/tracking/odometry` `.pose.pose.position.{x,y,z}` | VIO tracking as you carry the drone |
+| Raw Messages | `/skybeta/state` | `px4_link`, `armed`, `offboard_active`, `clamped` |
+| Image | `/oak/left/image_mono`; `/policynav/depth/image` (when our pipeline runs) | Camera / stereo depth |
+| 3D | TF, odometry | Pose and frames |
+
+- Images are 650 KB to 2 MB per frame. Open only the panels you need, and close the image panels before flying.
+- Offline alternative with no load on the drone: record a bag (`cd ~/skybeta && host/run.sh bag`), copy the `.mcap`
+  to the laptop and open it in Foxglove.
+- rviz2 on the laptop is possible, but needs ROS 2 Humble there plus `SKYBETA_DDS_SCOPE=network` and a stack
+  restart. The restart re-zeroes VIO, and the camera streams then leave the drone. Use Foxglove instead.
+
+## 8. Moving code off the drone
+
+`origin` is `git@github.com:low-crane-dronehacks/deploy.git`. SSH goes through the laptop: `~/.ssh/config` sets a
+`ProxyCommand` to `127.0.0.1:8888`. With the laptop connected, plain `git push` / `git pull` work. Opening PRs needs
+the GitHub web UI (or a token). Without the laptop, export a branch to push from elsewhere:
 
 ```bash
 git -C ~/team_ws/src/deploy bundle create ~/team_ws/scratch/<branch>.bundle origin/main..<branch>
