@@ -47,7 +47,11 @@ target_include_directories(policynav_core PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRE
 target_link_libraries(policynav_core PRIVATE ZLIB::ZLIB Eigen3::Eigen)
 add_executable(policy_core_decision_gate_test tests/policy_core/decision_gate_test.cpp)
 target_link_libraries(policy_core_decision_gate_test policynav_core)
-install(TARGETS policy_core_decision_gate_test DESTINATION lib/${PROJECT_NAME})
+# Golden test against the Python implementation: inputs/outputs from tests/policy_core/make_golden.py (offline).
+add_executable(policy_core_golden_test tests/policy_core/golden_test.cpp)
+target_compile_options(policy_core_golden_test PRIVATE -O2)
+target_link_libraries(policy_core_golden_test policynav_core)
+install(TARGETS policy_core_decision_gate_test policy_core_golden_test DESTINATION lib/${PROJECT_NAME})
 if(BUILD_TESTING)
   enable_testing()
   add_test(NAME policy_core_decision_gate COMMAND policy_core_decision_gate_test)
