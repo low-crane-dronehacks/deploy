@@ -12,7 +12,7 @@ the safety envelope). mode:=handheld does not start it and publishes no setpoint
 """
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.conditions import LaunchConfigurationEquals
+from launch.conditions import LaunchConfigurationEquals, LaunchConfigurationNotEquals
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
@@ -49,6 +49,7 @@ def generate_launch_description():
     )
     depth = Node(
         package='policynav', executable='stereo_depth', name='policynav_depth', output='screen', emulate_tty=True,
+        condition=LaunchConfigurationNotEquals('stereo_backend', 'vpi'),    # vpi: vpi_stereo rectifies + matches in C++
         parameters=[{'backend': PythonExpression(["'external' if '", lc('stereo_backend'), "' == 'vpi' else '",
                                                   lc('stereo_backend'), "'"]),
                      'max_disparity': lc('max_disparity'), 'rate_hz': lc('depth_rate_hz')}],
@@ -56,7 +57,7 @@ def generate_launch_description():
     vpi = Node(
         package='policynav', executable='vpi_stereo', name='policynav_vpi_stereo', output='screen', emulate_tty=True,
         condition=LaunchConfigurationEquals('stereo_backend', 'vpi'),
-        parameters=[{'max_disparity': lc('max_disparity')}],
+        parameters=[{'max_disparity': lc('max_disparity'), 'rate_hz': lc('depth_rate_hz')}],
     )
     policy = Node(
         package='policynav', executable='skybeta_policy', name='policynav_skybeta', output='screen',

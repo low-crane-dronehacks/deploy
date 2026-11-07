@@ -1,10 +1,12 @@
-// vpi_stereo: VPI census + SGM stereo disparity (CUDA backend) on the rectified pair from policynav's depth node.
+// vpi_stereo: rectify the OAK's raw mono pair (OpenCV remap, maps built once from camera_info + the left->right TF)
+// and run VPI census + SGM stereo disparity (CUDA backend). No Python in the path.
 //
-//   in   /policynav/stereo/{left,right}/image_rect  mono8, rectified (policynav/depth_node.py backend:=external)
-//        /policynav/stereo/camera_info              rectified geometry: K, and P[3] = -fx * baseline
-//   out  /policynav/depth/image                     32FC1 metres, NaN = invalid (no match / low confidence /
-//                                                   out of range): the same contract as the Python matchers
-//        /policynav/depth/camera_info
+//   in   /oak/{left,right}/image_mono     mono8 raw (1024x640); frame ids come from /oak/{left,right}/camera_info
+//        /oak/{left,right}/camera_info    raw K, D (skybeta: D=0, R=I, no common P), then TF left_optical -> right_optical
+//   out  /policynav/depth/image           32FC1 metres, NaN = invalid (no match / low confidence / out of range):
+//                                         the same contract as the Python matchers
+//        /policynav/depth/camera_info     K of the rectified left image (P[3] = 0), frame <left optical>_rect
+//        TF <left optical> -> <left optical>_rect (static; rotation of the rectified frame)
 //
 // Census matching is insensitive to brightness differences between the eyes (glare, exposure). Low-confidence
 // pixels become holes, which the policy reads as near: holes are safe, confidently wrong depth is not.
@@ -14,6 +16,10 @@
 #include <vpi/algo/ConvertImageFormat.h>
 #include <vpi/algo/StereoDisparity.h>
 
+#include <opencv2/calib3d.hpp>
+#include <opencv2/imgproc.hpp>
+
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -21,10 +27,17 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
+#include "geometry_msgs/msg/transform_stamped.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/camera_info.hpp"
 #include "sensor_msgs/msg/image.hpp"
+#include "tf2/LinearMath/Matrix3x3.h"
+#include "tf2/LinearMath/Quaternion.h"
+#include "tf2_ros/buffer.h"
+#include "tf2_ros/static_transform_broadcaster.h"
+#include "tf2_ros/transform_listener.h"
 
 #define VPI_CHECK(expr)                                                                        \
   do {                                                                                         \
@@ -39,38 +52,127 @@
 using sensor_msgs::msg::CameraInfo;
 using sensor_msgs::msg::Image;
 
+namespace {
+double stamp_s(const builtin_interfaces::msg::Time& t) { return t.sec + 1e-9 * t.nanosec; }
+}  // namespace
+
 class VpiStereo : public rclcpp::Node {
  public:
-  VpiStereo() : Node("policynav_vpi_stereo") {
+  VpiStereo()
+      : Node("policynav_vpi_stereo"), tf_buffer_(get_clock()), tf_listener_(tf_buffer_), tf_pub_(this) {
     max_disp_ = declare_parameter<int>("max_disparity", 96);
     window_ = declare_parameter<int>("window", 5);
     conf_thr_ = declare_parameter<int>("conf_threshold", 32767);
     min_m_ = declare_parameter<double>("min_depth_m", 0.2);
     max_m_ = declare_parameter<double>("max_depth_m", 20.0);
     integer_ = declare_parameter<bool>("integer_disparity", false);
+    out_w_ = declare_parameter<int>("out_w", 640);
+    out_h_ = declare_parameter<int>("out_h", 400);
+    rate_hz_ = declare_parameter<double>("rate_hz", 15.0);
+    slop_s_ = declare_parameter<double>("sync_slop_s", 0.005);
+    const std::string ns_l = declare_parameter<std::string>("left_ns", "/oak/left");
+    const std::string ns_r = declare_parameter<std::string>("right_ns", "/oak/right");
+    const std::string img = declare_parameter<std::string>("image_topic", "image_mono");
     auto qos = rclcpp::SensorDataQoS();
-    sub_info_ = create_subscription<CameraInfo>("/policynav/stereo/camera_info", qos,
-                                                [this](CameraInfo::ConstSharedPtr m) { info_ = m; });
-    sub_l_ = create_subscription<Image>("/policynav/stereo/left/image_rect", qos,
-                                        [this](Image::ConstSharedPtr m) { left_ = m; try_match(); });
-    sub_r_ = create_subscription<Image>("/policynav/stereo/right/image_rect", qos,
-                                        [this](Image::ConstSharedPtr m) { right_ = m; try_match(); });
+    sub_info_l_ = create_subscription<CameraInfo>(ns_l + "/camera_info", qos, [this](CameraInfo::ConstSharedPtr m) {
+      if (!info_l_ && m->k[0] > 0) info_l_ = m;
+    });
+    sub_info_r_ = create_subscription<CameraInfo>(ns_r + "/camera_info", qos, [this](CameraInfo::ConstSharedPtr m) {
+      if (!info_r_ && m->k[0] > 0) info_r_ = m;
+    });
+    sub_l_ = create_subscription<Image>(ns_l + "/" + img, qos, [this](Image::ConstSharedPtr m) { left_ = m; try_pair(); });
+    sub_r_ = create_subscription<Image>(ns_r + "/" + img, qos, [this](Image::ConstSharedPtr m) { right_ = m; try_pair(); });
     pub_ = create_publisher<Image>("/policynav/depth/image", qos);
     pub_info_ = create_publisher<CameraInfo>("/policynav/depth/camera_info", qos);
     VPI_CHECK(vpiStreamCreate(VPI_BACKEND_CUDA, &stream_));
-    RCLCPP_INFO(get_logger(), "VPI stereo (CUDA): max disparity %d, window %d, confidence >= %d", max_disp_, window_,
-                conf_thr_);
+    RCLCPP_INFO(get_logger(), "VPI stereo (CUDA): max disparity %d, window %d, confidence >= %d, <= %.1f Hz, %dx%d",
+                max_disp_, window_, conf_thr_, rate_hz_, out_w_, out_h_);
   }
 
   ~VpiStereo() override {
-    vpiStreamSync(stream_);
-    vpiPayloadDestroy(payload_);
-    for (VPIImage im : {in8_l_, in8_r_, in16_l_, in16_r_, disp_, conf_}) vpiImageDestroy(im);
-    vpiStreamDestroy(stream_);
+    if (stream_) vpiStreamSync(stream_);
+    if (payload_) vpiPayloadDestroy(payload_);
+    for (VPIImage im : {in8_l_, in8_r_, in16_l_, in16_r_, disp_, conf_})
+      if (im) vpiImageDestroy(im);
+    if (stream_) vpiStreamDestroy(stream_);
   }
 
  private:
-  void setup(int w, int h) {
+  // Rectification from the raw intrinsics and the right camera's pose in the left optical frame, exactly as
+  // policynav/stereo.py stereo_rect_from_extrinsics(): output grid out_w x out_h, alpha = 0, zero disparity.
+  bool setup_rectification() {
+    const CameraInfo& L = *info_l_;
+    const CameraInfo& R = *info_r_;
+    geometry_msgs::msg::TransformStamped tf;
+    try {
+      tf = tf_buffer_.lookupTransform(L.header.frame_id, R.header.frame_id, tf2::TimePointZero);
+    } catch (const std::exception& e) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "waiting for TF %s -> %s: %s", L.header.frame_id.c_str(),
+                           R.header.frame_id.c_str(), e.what());
+      return false;
+    }
+    const auto& q = tf.transform.rotation;
+    const auto& t = tf.transform.translation;
+    tf2::Matrix3x3 m(tf2::Quaternion(q.x, q.y, q.z, q.w));
+    cv::Matx33d R_lr;                                       // p_left = R_lr p_right + t_lr
+    for (int i = 0; i < 3; ++i)
+      for (int j = 0; j < 3; ++j) R_lr(i, j) = m[i][j];
+    const cv::Vec3d t_lr(t.x, t.y, t.z);
+    const cv::Matx33d R_rl = R_lr.t();                      // stereoRectify wants x_right = R x_left + T
+    const cv::Vec3d T = -(R_rl * t_lr);
+    const double sx = static_cast<double>(out_w_) / L.width, sy = static_cast<double>(out_h_) / L.height;
+    const cv::Matx33d S(sx, 0, 0.5 * sx - 0.5, 0, sy, 0.5 * sy - 0.5, 0, 0, 1);
+    const cv::Matx33d K1(L.k[0], L.k[1], L.k[2], L.k[3], L.k[4], L.k[5], L.k[6], L.k[7], L.k[8]);
+    const cv::Matx33d K2(R.k[0], R.k[1], R.k[2], R.k[3], R.k[4], R.k[5], R.k[6], R.k[7], R.k[8]);
+    auto dist = [](const CameraInfo& c) {                  // skybeta: all zeros; honour a real model if one appears
+      std::vector<double> d;
+      if (c.distortion_model == "plumb_bob" || c.distortion_model == "rational_polynomial")
+        d.assign(c.d.begin(), c.d.begin() + std::min<size_t>(c.d.size(), 8));
+      if (d.empty()) d.assign(5, 0.0);
+      return d;
+    };
+    const std::vector<double> D1 = dist(L), D2 = dist(R);
+    cv::Mat R1, R2, P1, P2, Q;
+    const cv::Size out(out_w_, out_h_);
+    const cv::Matx33d K1s = S * K1, K2s = S * K2;           // intrinsics re-expressed on the output grid
+    cv::stereoRectify(cv::Mat(K1s), D1, cv::Mat(K2s), D2, out, cv::Mat(R_rl), cv::Mat(T), R1, R2, P1, P2, Q,
+                      cv::CALIB_ZERO_DISPARITY, 0.0);
+    // remap: output pixel -> SOURCE pixel, so the source-resolution K with the output-grid P
+    cv::initUndistortRectifyMap(cv::Mat(K1), D1, R1, P1(cv::Rect(0, 0, 3, 3)), out, CV_32FC1, m1x_, m1y_);
+    cv::initUndistortRectifyMap(cv::Mat(K2), D2, R2, P2(cv::Rect(0, 0, 3, 3)), out, CV_32FC1, m2x_, m2y_);
+    fx_ = P1.at<double>(0, 0);
+    cx_ = P1.at<double>(0, 2);
+    cy_ = P1.at<double>(1, 2);
+    baseline_ = std::abs(-P2.at<double>(0, 3) / P2.at<double>(0, 0));
+    src_w_ = L.width;
+    src_h_ = L.height;
+    frame_ = L.header.frame_id + "_rect";
+
+    // static TF: the rectified frame's axes expressed in the left camera frame (rotation R1^T)
+    cv::Mat R1t = R1.t();
+    tf2::Matrix3x3 rm(R1t.at<double>(0, 0), R1t.at<double>(0, 1), R1t.at<double>(0, 2), R1t.at<double>(1, 0),
+                      R1t.at<double>(1, 1), R1t.at<double>(1, 2), R1t.at<double>(2, 0), R1t.at<double>(2, 1),
+                      R1t.at<double>(2, 2));
+    tf2::Quaternion rq;
+    rm.getRotation(rq);
+    geometry_msgs::msg::TransformStamped ts;
+    ts.header.stamp = now();
+    ts.header.frame_id = L.header.frame_id;
+    ts.child_frame_id = frame_;
+    ts.transform.rotation.x = rq.x();
+    ts.transform.rotation.y = rq.y();
+    ts.transform.rotation.z = rq.z();
+    ts.transform.rotation.w = rq.w();
+    tf_pub_.sendTransform(ts);
+    if (baseline_ < 0.02 || baseline_ > 0.2)
+      RCLCPP_ERROR(get_logger(), "implausible baseline %.4f m from the TF: check camera_info / calibration", baseline_);
+    RCLCPP_INFO(get_logger(), "rectified from TF extrinsics: fx %.1f at %d px, baseline %.2f cm, min range %.2f m", fx_,
+                out_w_, baseline_ * 100.0, fx_ * baseline_ / max_disp_);
+    rect_ready_ = true;
+    return true;
+  }
+
+  void setup_vpi(int w, int h) {
     w_ = w;
     h_ = h;
     const uint64_t flags = VPI_BACKEND_CUDA | VPI_BACKEND_CPU;
@@ -87,49 +189,62 @@ class VpiStereo : public rclcpp::Node {
     RCLCPP_INFO(get_logger(), "VPI images %dx%d ready", w, h);
   }
 
-  // copy a mono8 ROS image into a VPI U8 image (host pitch-linear lock)
-  void upload(const Image& m, VPIImage dst) {
+  // rectify a raw mono8 ROS image straight into the VPI U8 image's host memory (one pass, no extra copy)
+  void rectify_into(const Image& m, const cv::Mat& mx, const cv::Mat& my, VPIImage dst) {
     VPIImageData d;
     VPI_CHECK(vpiImageLockData(dst, VPI_LOCK_WRITE, VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR, &d));
     const auto& pl = d.buffer.pitch.planes[0];
-    auto* base = static_cast<uint8_t*>(pl.data);
-    for (int y = 0; y < h_; ++y) std::memcpy(base + y * pl.pitchBytes, m.data.data() + y * m.step, w_);
+    cv::Mat src(m.height, m.width, CV_8UC1, const_cast<uint8_t*>(m.data.data()), m.step);
+    cv::Mat out(h_, w_, CV_8UC1, pl.data, pl.pitchBytes);
+    cv::remap(src, out, mx, my, cv::INTER_LINEAR);
     VPI_CHECK(vpiImageUnlock(dst));
   }
 
-  void try_match() {
-    if (!info_) {
-      RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000, "waiting for /policynav/stereo/camera_info");
-      return;
-    }
+  void try_pair() {
     if (!left_ || !right_) return;
-    if (left_->header.stamp != right_->header.stamp) {          // wait for the matching pair
+    const double tl = stamp_s(left_->header.stamp), tr = stamp_s(right_->header.stamp);
+    if (std::abs(tl - tr) > slop_s_) {                      // drop the older eye and wait for its partner
       if (++unpaired_ % 150 == 0)
-        RCLCPP_WARN(get_logger(), "%zu images without an equal-stamp partner (the rectifier must stamp both alike)",
-                    unpaired_);
+        RCLCPP_WARN(get_logger(), "%zu images without a partner within %.1f ms", unpaired_, slop_s_ * 1e3);
+      (tl < tr ? left_ : right_).reset();
       return;
     }
     auto l = left_, r = right_;
     left_.reset();
     right_.reset();
-    if (l->encoding != "mono8" || r->encoding != "mono8" || l->width != r->width || l->height != r->height) {
-      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 5000, "expected matching mono8 rectified images");
+    const double now_s = now().seconds();
+    if (now_s - t_last_ < 1.0 / rate_hz_) return;           // match at most rate_hz (15 Hz, as trained)
+    if (!info_l_ || !info_r_) {
+      RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000, "waiting for /oak/{left,right}/camera_info");
       return;
     }
-    if (w_ != static_cast<int>(l->width) || h_ != static_cast<int>(l->height)) setup(l->width, l->height);
-    const double fx = info_->p[0], fB = -info_->p[3];         // P[3] = -fx * baseline
-    if (fx <= 0 || fB <= 0) {
-      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 5000, "camera_info P has no baseline (P[3] >= 0)");
+    if (!rect_ready_ && !setup_rectification()) return;
+    if (l->encoding != "mono8" || r->encoding != "mono8" || l->width != src_w_ || l->height != src_h_ ||
+        r->width != src_w_ || r->height != src_h_) {
+      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 5000, "expected %ux%u mono8 raw images from both eyes", src_w_,
+                            src_h_);
       return;
     }
+    t_last_ = now_s;
+    try {
+      if (w_ != out_w_ || h_ != out_h_) setup_vpi(out_w_, out_h_);
+    } catch (const std::exception& e) {
+      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 5000, "VPI setup: %s", e.what());
+      return;
+    }
+    match(*l, *r);
+  }
+
+  void match(const Image& l, const Image& r) {
+    const double fB = fx_ * baseline_;
     const auto t0 = std::chrono::steady_clock::now();
     try {
-      upload(*l, in8_l_);
-      upload(*r, in8_r_);
-      VPIConvertImageFormatParams cv;
-      VPI_CHECK(vpiInitConvertImageFormatParams(&cv));
-      VPI_CHECK(vpiSubmitConvertImageFormat(stream_, VPI_BACKEND_CUDA, in8_l_, in16_l_, &cv));
-      VPI_CHECK(vpiSubmitConvertImageFormat(stream_, VPI_BACKEND_CUDA, in8_r_, in16_r_, &cv));
+      rectify_into(l, m1x_, m1y_, in8_l_);
+      rectify_into(r, m2x_, m2y_, in8_r_);
+      VPIConvertImageFormatParams cvp;
+      VPI_CHECK(vpiInitConvertImageFormatParams(&cvp));
+      VPI_CHECK(vpiSubmitConvertImageFormat(stream_, VPI_BACKEND_CUDA, in8_l_, in16_l_, &cvp));
+      VPI_CHECK(vpiSubmitConvertImageFormat(stream_, VPI_BACKEND_CUDA, in8_r_, in16_r_, &cvp));
       VPIStereoDisparityEstimatorParams sp;
       VPI_CHECK(vpiInitStereoDisparityEstimatorParams(&sp));
       sp.windowSize = window_;
@@ -143,7 +258,8 @@ class VpiStereo : public rclcpp::Node {
       return;
     }
     auto out = std::make_unique<Image>();
-    out->header = l->header;
+    out->header.stamp = l.header.stamp;
+    out->header.frame_id = frame_;
     out->width = w_;
     out->height = h_;
     out->encoding = "32FC1";
@@ -152,48 +268,69 @@ class VpiStereo : public rclcpp::Node {
     out->data.resize(static_cast<size_t>(out->step) * h_);
     auto* z = reinterpret_cast<float*>(out->data.data());
     const float nan = std::numeric_limits<float>::quiet_NaN();
-    VPIImageData dd, cd;
-    VPI_CHECK(vpiImageLockData(disp_, VPI_LOCK_READ, VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR, &dd));
-    VPI_CHECK(vpiImageLockData(conf_, VPI_LOCK_READ, VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR, &cd));
-    const auto& dp = dd.buffer.pitch.planes[0];
-    const auto& cpl = cd.buffer.pitch.planes[0];
     size_t valid = 0;
-    for (int y = 0; y < h_; ++y) {
-      const auto* drow = reinterpret_cast<const int16_t*>(static_cast<const uint8_t*>(dp.data) + y * dp.pitchBytes);
-      const auto* crow = reinterpret_cast<const uint16_t*>(static_cast<const uint8_t*>(cpl.data) + y * cpl.pitchBytes);
-      for (int x = 0; x < w_; ++x) {
-        float d = drow[x] / 32.0f;                              // S16 Q10.5
-        if (integer_) d = std::floor(d + 0.5f);
-        float v = nan;
-        if (d > 0.f && crow[x] >= conf_thr_) {
-          const float m = static_cast<float>(fB / d);
-          if (m >= min_m_ && m <= max_m_) { v = m; ++valid; }
+    try {
+      VPIImageData dd, cd;
+      VPI_CHECK(vpiImageLockData(disp_, VPI_LOCK_READ, VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR, &dd));
+      VPI_CHECK(vpiImageLockData(conf_, VPI_LOCK_READ, VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR, &cd));
+      const auto& dp = dd.buffer.pitch.planes[0];
+      const auto& cpl = cd.buffer.pitch.planes[0];
+      for (int y = 0; y < h_; ++y) {
+        const auto* drow = reinterpret_cast<const int16_t*>(static_cast<const uint8_t*>(dp.data) + y * dp.pitchBytes);
+        const auto* crow = reinterpret_cast<const uint16_t*>(static_cast<const uint8_t*>(cpl.data) + y * cpl.pitchBytes);
+        for (int x = 0; x < w_; ++x) {
+          float d = drow[x] / 32.0f;                              // S16 Q10.5
+          if (integer_) d = std::floor(d + 0.5f);
+          float v = nan;
+          if (d > 0.f && crow[x] >= conf_thr_) {
+            const float m = static_cast<float>(fB / d);
+            if (m >= min_m_ && m <= max_m_) { v = m; ++valid; }
+          }
+          z[y * w_ + x] = v;
         }
-        z[y * w_ + x] = v;
       }
+      vpiImageUnlock(disp_);
+      vpiImageUnlock(conf_);
+    } catch (const std::exception& e) {
+      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 5000, "VPI: %s", e.what());
+      return;
     }
-    vpiImageUnlock(disp_);
-    vpiImageUnlock(conf_);
-    auto ci = std::make_unique<CameraInfo>(*info_);
-    ci->header = l->header;
+    auto ci = std::make_unique<CameraInfo>();
+    ci->header = out->header;
+    ci->width = w_;
+    ci->height = h_;
+    ci->k = {fx_, 0.0, cx_, 0.0, fx_, cy_, 0.0, 0.0, 1.0};
+    ci->p = {fx_, 0.0, cx_, 0.0, 0.0, fx_, cy_, 0.0, 0.0, 0.0, 1.0, 0.0};
+    ci->r = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+    ci->distortion_model = "plumb_bob";
+    ci->d = {0.0, 0.0, 0.0, 0.0, 0.0};
     pub_->publish(std::move(out));
     pub_info_->publish(std::move(ci));
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-    RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000, "VPI stereo %.1f ms, valid %.0f%%", ms,
+    RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000, "VPI stereo (rectify + match) %.1f ms, valid %.0f%%", ms,
                          100.0 * valid / (static_cast<double>(w_) * h_));
   }
 
-  int max_disp_, window_, conf_thr_;
-  double min_m_, max_m_;
+  int max_disp_, window_, conf_thr_, out_w_, out_h_;
+  double min_m_, max_m_, rate_hz_, slop_s_;
   bool integer_;
   int w_ = 0, h_ = 0;
+  uint32_t src_w_ = 0, src_h_ = 0;
   size_t unpaired_ = 0;
+  double t_last_ = 0.0;
+  bool rect_ready_ = false;
+  double fx_ = 0, cx_ = 0, cy_ = 0, baseline_ = 0;
+  std::string frame_;
+  cv::Mat m1x_, m1y_, m2x_, m2y_;
   VPIStream stream_ = nullptr;
   VPIPayload payload_ = nullptr;
   VPIImage in8_l_ = nullptr, in8_r_ = nullptr, in16_l_ = nullptr, in16_r_ = nullptr, disp_ = nullptr, conf_ = nullptr;
   Image::ConstSharedPtr left_, right_;
-  CameraInfo::ConstSharedPtr info_;
-  rclcpp::Subscription<CameraInfo>::SharedPtr sub_info_;
+  CameraInfo::ConstSharedPtr info_l_, info_r_;
+  tf2_ros::Buffer tf_buffer_;
+  tf2_ros::TransformListener tf_listener_;
+  tf2_ros::StaticTransformBroadcaster tf_pub_;
+  rclcpp::Subscription<CameraInfo>::SharedPtr sub_info_l_, sub_info_r_;
   rclcpp::Subscription<Image>::SharedPtr sub_l_, sub_r_;
   rclcpp::Publisher<Image>::SharedPtr pub_;
   rclcpp::Publisher<CameraInfo>::SharedPtr pub_info_;
