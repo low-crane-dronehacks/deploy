@@ -1,0 +1,213 @@
+{
+  "course_name": "DroneHacks 2026 Course v3",
+  "frame": "NED",
+  "grid": {
+    "binary_file": "arena_prior.bin",
+    "resolution_m": 0.05,
+    "lo_ned": [
+      -3.05,
+      -3.05,
+      -3.05
+    ],
+    "hi_ned": [
+      3.05,
+      3.05,
+      0.0
+    ],
+    "shape": [
+      123,
+      123,
+      62
+    ],
+    "distance_scale": 200.0,
+    "occupied_threshold_m": 0.035
+  },
+  "arena": {
+    "arena_half_m": 3.0,
+    "net_top_m": 3.0,
+    "wall_top_m": 1.7271999999999998,
+    "collision_radius_m": 0.2,
+    "cp_margin_m": 0.15,
+    "touchdown_alt_m": 0.05,
+    "rest_alt_m": 0.08,
+    "lift_alt_m": 0.3,
+    "land_max_speed_ms": 1.0
+  },
+  "landmarks": {
+    "launch_mark_ned": [
+      0.9144,
+      -2.5146,
+      0.0
+    ],
+    "pad_center_ned": [
+      -0.7925,
+      -2.0422,
+      0.0
+    ],
+    "pad_radius_m": 0.9906,
+    "return_radius_m": 0.6096,
+    "return_hold_s": 3.0
+  },
+  "gates": [
+    {
+      "index": 0,
+      "name": "corridor_end",
+      "checkpoint": 0,
+      "is_window": false,
+      "A_ned": [
+        2.5844,
+        -3.048
+      ],
+      "B_ned": [
+        2.5844,
+        -1.9304
+      ],
+      "tangent_ned": [
+        0.0,
+        1.0
+      ],
+      "normal_ned": [
+        1.0,
+        0.0
+      ],
+      "length_m": 1.1176,
+      "center_ned": [
+        2.5844,
+        -2.5739,
+        -0.8
+      ],
+      "alt_min_m": 0.45,
+      "alt_max_m": 1.35,
+      "alt_nominal_m": 0.8,
+      "nominal_clearance_m": 0.4155
+    },
+    {
+      "index": 1,
+      "name": "gate_a",
+      "checkpoint": 1,
+      "is_window": false,
+      "A_ned": [
+        2.1209,
+        0.3048
+      ],
+      "B_ned": [
+        3.048,
+        0.3048
+      ],
+      "tangent_ned": [
+        1.0,
+        0.0
+      ],
+      "normal_ned": [
+        0.0,
+        1.0
+      ],
+      "length_m": 0.9271,
+      "center_ned": [
+        2.5601,
+        0.3048,
+        -0.8
+      ],
+      "alt_min_m": 0.45,
+      "alt_max_m": 1.35,
+      "alt_nominal_m": 0.8,
+      "nominal_clearance_m": 0.4392
+    },
+    {
+      "index": 2,
+      "name": "tunnel_exit",
+      "checkpoint": 2,
+      "is_window": false,
+      "A_ned": [
+        -0.3048,
+        1.5748
+      ],
+      "B_ned": [
+        -0.3048,
+        3.048
+      ],
+      "tangent_ned": [
+        0.0,
+        1.0
+      ],
+      "normal_ned": [
+        -1.0,
+        0.0
+      ],
+      "length_m": 1.4732,
+      "center_ned": [
+        -0.3048,
+        2.3114,
+        -0.8
+      ],
+      "alt_min_m": 0.55,
+      "alt_max_m": 1.15,
+      "alt_nominal_m": 0.8,
+      "nominal_clearance_m": 0.6886
+    },
+    {
+      "index": 3,
+      "name": "gate_b",
+      "checkpoint": 3,
+      "is_window": false,
+      "A_ned": [
+        -0.5472,
+        0.1568
+      ],
+      "B_ned": [
+        0.4064,
+        0.1568
+      ],
+      "tangent_ned": [
+        1.0,
+        0.0
+      ],
+      "normal_ned": [
+        0.0,
+        -1.0
+      ],
+      "length_m": 0.9536,
+      "center_ned": [
+        -0.0576,
+        0.1568,
+        -0.8
+      ],
+      "alt_min_m": 0.45,
+      "alt_max_m": 1.35,
+      "alt_nominal_m": 0.8,
+      "nominal_clearance_m": 0.464
+    },
+    {
+      "index": 4,
+      "name": "window",
+      "checkpoint": 3,
+      "is_window": true,
+      "A_ned": [
+        -2.7015,
+        -0.6273
+      ],
+      "B_ned": [
+        -1.8423,
+        -0.3146
+      ],
+      "tangent_ned": [
+        0.939693,
+        0.34202
+      ],
+      "normal_ned": [
+        0.34202,
+        -0.939693
+      ],
+      "length_m": 0.9144,
+      "center_ned": [
+        -2.283,
+        -0.475,
+        -0.78
+      ],
+      "alt_min_m": 0.62,
+      "alt_max_m": 0.92,
+      "alt_nominal_m": 0.78,
+      "nominal_clearance_m": 0.4392
+    }
+  ]
+}

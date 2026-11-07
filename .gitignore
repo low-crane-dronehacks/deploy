@@ -4,7 +4,9 @@ __pycache__/
 *.mcap
 *.db3
 .pytest_cache/
-# colcon / cmake (src/)
-/build/
-/install/
-/log/
+# colcon / cmake (src/, ego_planner/)
+build/
+install/
+log/
+*.so
+ego_planner/build/

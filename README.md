@@ -1,35 +1,44 @@
 # deploy
 
-Drone software for DroneHacks 2026: one ROS 2 / PX4 stack that runs **unchanged** on the aircraft, on our
+Drone software for DroneHacks 2026: one modular ROS 2 / PX4 stack that runs **unchanged** on the aircraft, on our
 PX4 SITL rig, and in the organizers' simulator. Only the hardware layer differs (`hardware:=drone|sitl|flyx`).
-Policies are trained in [dronehacks-sim](https://github.com/ColinBalfour/dronehacks-sim) and exported here as
-NumPy `.npz` files (no torch needed on the drone).
+
+Supports both learned RL neural policies (`policynav/`) and classical/optimization-based autonomy stacks (`ego_planner/`),
+modularized for **EGO-Planner-v2**, **MPPI**, **RRT\***, and **iSAM2**.
 
 ```
-policynav/   policy node: depth + PX4 state -> Offboard velocity setpoints; mission/safety logic (mission.py)
-src/         C++ iSAM2 factor graph (depth ICP + PX4) -> state + distance field for an MPPI (docs/ISAM2.md)
-policies/    exported policies (.npz)   python -m dronehacks.export_policy <ckpt> --out policies/<name>.npz
-onboard/     VIO: cuVSLAM wrapper, external-vision bridge to PX4, health (from the organizers' workspace)
-launch/      policynav.launch.py: hardware:=drone|sitl|flyx, arm:=false|true, policy:=...
-config/      versions.yaml (pinned PX4 / px4_msgs / cuVSLAM), oak.yaml (camera), PX4 params
-sitl/        PX4 SITL rig: Docker, PX4 1.17 + Gazebo Harmonic + uXRCE, our course world
-docker/      Jetson image (todo)
-docs/        SITL.md, FLYX_LOCAL.md (organizers' sim on pear-omen), POLICIES.md, HARDWARE.md, ISAM2.md
+ego_planner/   C++17 ROS 2 autonomy stack: GridMap 3D ESDF, Motion Primitives, B-Spline Optimizer,
+               Quadrotor Dynamics, Global Planner Interface (RRT*), Local Controller Interface (MPPI),
+               and Mission Manager state machine
+launch/        autonomy.launch.py (alias of ego_planner.launch.py) & policynav.launch.py
+config/        arena_prior.bin, arena_prior.json (surveyed 3D course anchors & 5cm voxel ESDF)
+src/           C++ iSAM2 factor graph (depth ICP + PX4) -> state + distance field for an MPPI (docs/ISAM2.md)
+onboard/       VIO & SLAM: cuVSLAM wrapper, iSAM2 factor graph node (slam/isam2_node.py), EV bridge
+policynav/     policy node: depth + PX4 state -> Offboard velocity setpoints (NumPy export)
+sitl/          PX4 SITL rig: Docker/Apptainer, PX4 1.17 + Gazebo Harmonic + uXRCE, course world
+docs/          AUTONOMY_ARCHITECTURE.md, SITL.md, FLYX_LOCAL.md, POLICIES.md, HARDWARE.md, ISAM2.md
 ```
 
-## Run
+## Architecture & Modular Packages
+
+For complete architectural details, interface contracts, and instructions on plugging in **MPPI**, **RRT\***, and **iSAM2**, see:
+- [docs/AUTONOMY_ARCHITECTURE.md](docs/AUTONOMY_ARCHITECTURE.md)
+
+## Quick Start & Flight Execution
 
 ```bash
-# SITL (a lab PC with Docker + NVIDIA runtime)
-sitl/run_rig.sh build && sitl/run_rig.sh up          # PX4 + Gazebo + bridges, ~90 s
-sitl/run_rig.sh policy                                # dry run: reports what the policy would command
-sitl/run_rig.sh policy -p arm:=true                   # fly (SPAWN_POSE=x,y,z,r,p,yaw_enu moves the start, BATTERY_SOC=0..1)
+# 1. Run unit tests (C++ standalone and Python pytest)
+cd ego_planner/build && ./test_ego_planner_cpp
+pytest -v tests
 
-# organizers' simulator: hosted workspace, or locally on pear-omen (docs/FLYX_LOCAL.md)
-ros2 launch launch/policynav.launch.py hardware:=flyx
+# 2. Launch production EGO-Planner-v2 in SITL (arm:=true to fly)
+ros2 launch launch/autonomy.launch.py hardware:=sitl arm:=true desired_speed_ms:=2.25
 
-# aircraft (UNTESTED)
-ros2 launch launch/policynav.launch.py hardware:=drone
+# 3. Launch with modular options (RRT* global planner or MPPI local controller)
+ros2 launch launch/autonomy.launch.py hardware:=sitl arm:=true planner:=rrt_star controller:=mppi
+
+# 4. Dry-run / benchmark in fast simulator (10,000x real-time)
+python3 ego_planner/scripts/eval_ego_planner_sim.py --episodes 5 --speed 2.25
 ```
 
 **Nothing arms unless `arm:=true`.** Stop conditions (stale depth, estimator, geofence, time, pilot takeover)
