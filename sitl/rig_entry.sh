@@ -27,8 +27,27 @@ until gz topic -l 2>/dev/null | grep -q "^/world/$WORLD/clock"; do sleep 1; done
 # PX4 then attaches to the existing model by name (PX4_GZ_MODEL_NAME).
 IFS=, read -r PX PY PZ PR PP PYAW <<< "$PX4_GZ_MODEL_POSE"
 QZ=$(python3 -c "import math;print(math.sin(${PYAW:-0}/2))"); QW=$(python3 -c "import math;print(math.cos(${PYAW:-0}/2))")
+# Battery: BATTERY_SOC (0..1, default 1.0) sets the pack's state of charge at takeoff. The 4S 5000 mAh LiPo model
+# (sitl/battery.py + sitl/battery_4s5000.json, copied from dronehacks-sim) gives the loaded voltage at hover and the thrust it leaves
+# (~(V/V_ref)^2); the x500 motor constants are scaled by that factor in a private copy of the model. Static per
+# flight (a 3-min run drains ~5% more thrust that is not modelled here); PX4 is told about the pack below.
+SOC=${BATTERY_SOC:-1.0}
+TF=$(cd /rig/sitl && PYTHONPATH=/rig/sitl python3 -c "from battery import LiPoPack as P; p=P.from_json('battery_4s5000.json'); v,i=p.solve($SOC,p.hover_thrust_n); print(round(float(p.thrust_factor(v)),4))")
+mkdir -p /tmp/rig/models && cp -r $PX4_GZ_MODELS/x500 $PX4_GZ_MODELS/x500_base $PX4_GZ_MODELS/x500_depth /tmp/rig/models/ 2>/dev/null || cp -r $PX4_GZ_MODELS/x500 $PX4_GZ_MODELS/x500_depth /tmp/rig/models/
+python3 - "$TF" <<'PYEOF'
+import re, sys, glob
+f = float(sys.argv[1])
+for path in glob.glob('/tmp/rig/models/*/model.sdf'):
+    s = open(path).read()
+    s2 = re.sub(r'<motorConstant>([0-9.eE+-]+)</motorConstant>', lambda m: f'<motorConstant>{float(m.group(1)) * f:.6e}</motorConstant>', s)
+    if s2 != s:
+        open(path, 'w').write(s2)
+        print(f'battery: scaled motorConstant x{f} in {path}')
+PYEOF
+echo "battery: SoC $SOC -> hover thrust factor $TF" | tee battery.log
+export GZ_SIM_RESOURCE_PATH=/tmp/rig/models:$GZ_SIM_RESOURCE_PATH
 gz service -s /world/$WORLD/create --reqtype gz.msgs.EntityFactory --reptype gz.msgs.Boolean --timeout 10000 \
-  --req "sdf_filename: \"$PX4_GZ_MODELS/x500_depth/model.sdf\", name: \"$MODEL\", allow_renaming: false, pose: {position: {x: $PX, y: $PY, z: $PZ}, orientation: {z: $QZ, w: $QW}}" > spawn.log 2>&1
+  --req "sdf_filename: \"/tmp/rig/models/x500_depth/model.sdf\", name: \"$MODEL\", allow_renaming: false, pose: {position: {x: $PX, y: $PY, z: $PZ}, orientation: {z: $QZ, w: $QW}}" > spawn.log 2>&1
 export PX4_GZ_MODEL_NAME=$MODEL
 
 # 2. PX4 params for the indoor / external-vision estimate (appended to the airframe of this container's build)
