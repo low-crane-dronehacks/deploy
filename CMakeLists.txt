@@ -60,6 +60,7 @@ endif()
 ament_python_install_package(${PROJECT_NAME})
 install(PROGRAMS scripts/skybeta_policy scripts/stereo_depth scripts/handheld DESTINATION lib/${PROJECT_NAME})
 install(FILES launch/skybeta.launch.py launch/skybeta_climb_forward.launch.py DESTINATION share/${PROJECT_NAME}/launch)
+install(FILES config/fastdds_team.xml DESTINATION share/${PROJECT_NAME}/config)
 install(PROGRAMS onboard/examples/climb_forward_hold_skybeta.py DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY policies/ DESTINATION share/${PROJECT_NAME}/policies FILES_MATCHING PATTERN "*.npz")
 
