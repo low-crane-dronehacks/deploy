@@ -32,7 +32,7 @@ def _img_to_np(m: Image) -> np.ndarray:
     if ch is None:
         raise ValueError(f'unsupported image encoding {m.encoding!r}')
     dt = np.uint16 if m.encoding.lower() in ('mono16', '16uc1') else np.uint8
-    a = np.frombuffer(bytes(m.data), dt).reshape(m.height, m.step // np.dtype(dt).itemsize)
+    a = np.frombuffer(m.data, dt).reshape(m.height, m.step // np.dtype(dt).itemsize)
     a = a[:, :m.width * ch].reshape(m.height, m.width, ch) if ch > 1 else a[:, :m.width]
     return S.to_gray8(a)
 
@@ -56,6 +56,7 @@ class DepthNode(Node):
         self.rate_hz = float(dp('rate_hz', 15.0))
         self.slop = float(dp('sync_slop_s', 0.005))
         ns_l, ns_r = dp('left_ns', '/oak/left'), dp('right_ns', '/oak/right')
+        img_topic = dp('image_topic', 'image_mono')            # skybeta publishes image_mono (mono8) + image_raw (bgr8)
         backend = dp('backend', 'auto')
         if backend == 'external':                 # rectify only; src/vpi_stereo_node.cpp matches (VPI C API)
             self.matcher, self.backend = None, 'external'
@@ -73,7 +74,7 @@ class DepthNode(Node):
         for side, ns in (('l', ns_l), ('r', ns_r)):
             self.create_subscription(CameraInfo, f'{ns}/camera_info', lambda m, s=side: self._on_info(s, m),
                                      qos_profile_sensor_data)
-            self.create_subscription(Image, f'{ns}/image_raw', lambda m, s=side: self._on_img(s, m),
+            self.create_subscription(Image, f'{ns}/{img_topic}', lambda m, s=side: self._on_img(s, m),
                                      qos_profile_sensor_data)
         self.pub = self.create_publisher(Image, '/policynav/depth/image', qos_profile_sensor_data)
         self.pub_rect = {s: self.create_publisher(Image, f'/policynav/stereo/{s}/image_rect', qos_profile_sensor_data)
@@ -162,9 +163,9 @@ class DepthNode(Node):
         L = cv2.remap(_img_to_np(l), mxl, myl, cv2.INTER_LINEAR)
         R = cv2.remap(_img_to_np(r), mxr, myr, cv2.INTER_LINEAR)
         if self.matcher is None:                  # external matcher: publish the rectified pair + its geometry
-            for side, img, src in (('left', L, l), ('right', R, r)):
+            for side, img in (('left', L), ('right', R)):
                 m = Image()
-                m.header.stamp, m.header.frame_id = src.header.stamp, self.frame
+                m.header.stamp, m.header.frame_id = l.header.stamp, self.frame      # one stamp for the pair
                 m.height, m.width, m.encoding, m.is_bigendian, m.step = img.shape[0], img.shape[1], 'mono8', 0, img.shape[1]
                 m.data = img.tobytes()
                 self.pub_rect[side].publish(m)

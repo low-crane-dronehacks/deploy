@@ -42,9 +42,9 @@ CMD_SET_MODE, CMD_ARM, CMD_LAND = 176, 400, 21
 def decode_depth(m) -> np.ndarray:
     enc = m.encoding.lower()
     if enc in ('16uc1', 'mono16'):
-        a = np.frombuffer(bytes(m.data), np.uint16).reshape(m.height, m.step // 2)[:, :m.width].astype(np.float32) * 1e-3
+        a = np.frombuffer(m.data, np.uint16).reshape(m.height, m.step // 2)[:, :m.width].astype(np.float32) * 1e-3
     elif enc == '32fc1':
-        a = np.frombuffer(bytes(m.data), np.float32).reshape(m.height, m.step // 4)[:, :m.width].copy()
+        a = np.frombuffer(m.data, np.float32).reshape(m.height, m.step // 4)[:, :m.width].copy()
     else:
         raise ValueError(f'unsupported depth encoding {m.encoding!r}')
     a[np.isposinf(a)] = 1e3                 # +inf = nothing within range (a simulator's 'miss'): far, NOT invalid

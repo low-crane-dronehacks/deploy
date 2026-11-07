@@ -98,8 +98,17 @@ class VpiStereo : public rclcpp::Node {
   }
 
   void try_match() {
-    if (!left_ || !right_ || !info_) return;
-    if (left_->header.stamp != right_->header.stamp) return;   // wait for the matching pair
+    if (!info_) {
+      RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000, "waiting for /policynav/stereo/camera_info");
+      return;
+    }
+    if (!left_ || !right_) return;
+    if (left_->header.stamp != right_->header.stamp) {          // wait for the matching pair
+      if (++unpaired_ % 150 == 0)
+        RCLCPP_WARN(get_logger(), "%zu images without an equal-stamp partner (the rectifier must stamp both alike)",
+                    unpaired_);
+      return;
+    }
     auto l = left_, r = right_;
     left_.reset();
     right_.reset();
@@ -178,6 +187,7 @@ class VpiStereo : public rclcpp::Node {
   double min_m_, max_m_;
   bool integer_;
   int w_ = 0, h_ = 0;
+  size_t unpaired_ = 0;
   VPIStream stream_ = nullptr;
   VPIPayload payload_ = nullptr;
   VPIImage in8_l_ = nullptr, in8_r_ = nullptr, in16_l_ = nullptr, in16_r_ = nullptr, disp_ = nullptr, conf_ = nullptr;
