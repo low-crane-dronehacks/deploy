@@ -103,6 +103,8 @@ class Handheld(Node):
         self.rows, self.frames, self.timing = [], [], []
         self.last = None
         self._reset('start')
+        self.times, self.depth_stamp = {}, None
+        self.create_timer(5.0, self._timing_report)
         self.create_timer(0.1, self._control)
         self.create_timer(1.0, self._report)
         self.create_timer(30.0, self._save)
@@ -161,8 +163,17 @@ class Handheld(Node):
                                              vfov_deg=self.meta['vfov_deg'], far=self.meta['far_clip'], stride=2)
             self.get_logger().info(f'depth calibration: optical axis {self.reproj.axis_err_deg:.1f} deg off body x')
         try:
-            self.depth_img = self.reproj(decode_depth(m))
+            t_rx = self._now()
+            stamp = m.header.stamp.sec + 1e-9 * m.header.stamp.nanosec
+            self._tm('a camera->depth rx (age)', 1e3 * (t_rx - stamp))
+            t0 = time.perf_counter()
+            dimg = decode_depth(m)
+            self._tm('b decode depth msg', 1e3 * (time.perf_counter() - t0))
+            t0 = time.perf_counter()
+            self.depth_img = self.reproj(dimg)
+            self._tm('c reproject 640x400->128x80', 1e3 * (time.perf_counter() - t0))
             self.depth_t = self._now()
+            self.depth_stamp = stamp
         except ValueError as e:
             self.get_logger().error(str(e), throttle_duration_sec=5.0)
 
@@ -187,17 +198,38 @@ class Handheld(Node):
             self.policy.reset()
             self.stack.reset()
             self.prev_action[:] = 0.0
+        self._tm('d camera->policy start (age)', 1e3 * (t - self.depth_stamp))
         t0 = time.perf_counter()
         img = self.stack.push(self.depth_img)
         pro = O.proprio(vel, q, rng, self.prev_action, self.v_max)
         a = np.clip(self.policy(img, pro), -1.0, 1.0).astype(np.float32)
         self.timing.append(time.perf_counter() - t0)
+        self._tm('e policy forward', 1e3 * (time.perf_counter() - t0))
         self.prev_action = a
         vel_sp, yawspeed = O.action_to_setpoint(a[:4], q, self.v_max, self.yaw_max)
         self.last = dict(t=t, a=a, vel_sp=vel_sp, yawspeed=yawspeed, range=rng, range_src=rsrc, q=q, vel=vel)
         self.rows.append(np.concatenate([[t], a[:4], vel_sp, [yawspeed], vel, q, [rng]]).astype(np.float64))
         self.frames.append(self.depth_img.astype(np.float16))
+        t0 = time.perf_counter()
         self._publish(t, a, vel_sp, yawspeed, q)
+        self._tm('f publish obs+action+cmd', 1e3 * (time.perf_counter() - t0))
+        self._tm('g camera->command out (age)', 1e3 * (self._now() - self.depth_stamp))
+
+    # per-stage timing, p50/p95/max logged every timing_report_s (same format as vpi_stereo)
+    def _tm(self, name, ms):
+        self.times.setdefault(name, []).append(ms)
+
+    def _timing_report(self):
+        lines = []
+        for k in sorted(self.times):
+            v = sorted(self.times[k])
+            if not v:
+                continue
+            p = lambda q: v[min(len(v) - 1, int(q * (len(v) - 1) + 0.5))]  # noqa: E731
+            lines.append(f'  {k:<30} p50 {p(0.5):6.1f}  p95 {p(0.95):6.1f}  max {v[-1]:6.1f} ms  (n={len(v)})')
+        self.times = {}
+        if lines:
+            self.get_logger().info('timing:\n' + '\n'.join(lines))
 
     def _publish(self, t, a, vel_sp, yawspeed, q):
         stamp = self.get_clock().now().to_msg()

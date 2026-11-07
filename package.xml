@@ -12,10 +12,10 @@
   <depend>sensor_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>tf2</depend>
+  <depend>nav_msgs</depend>
   <depend>tf2_ros</depend>
   <depend>libopencv-dev</depend>
   <exec_depend>rclpy</exec_depend>
-  <exec_depend>nav_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>std_srvs</exec_depend>
   <exec_depend>px4_msgs</exec_depend>
