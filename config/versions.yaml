@@ -1,0 +1,8 @@
+# One PX4 interface everywhere (drone, sitl/, organizers' sim). A mismatch silently renames topics
+# (e.g. PX4 1.16 publishes vehicle_local_position without the _v1 suffix the node subscribes to).
+px4_firmware: v1.17.0          # Pixhawk 6C must run this (or a release with the same message versions); sitl/ builds it
+px4_msgs: release/1.17         # organizers' sim reports px4-msgs 2.0.1 (same message versions, *_v1 topics)
+micro_xrce_dds_agent: v3.0.1
+ros: jazzy
+cuvslam: 17.0.0                # organizers' sim (x86 cu12 wheel); the Jetson needs the matching ARM / JetPack build
+oak_d: OAK-D S2                # passive stereo (no IR projector), 640x400 mono pair, ~7.5 cm baseline

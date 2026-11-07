@@ -1,0 +1,14 @@
+{
+  "schema": "flyx-onboard-services/1",
+  "profiles": {
+    "vio": [
+      {"name": "cuvslam", "argv": ["python3", "-m", "onboard.slam.cuvslam_lib_node", "--ros-args", "--params-file", "{project}/onboard/config/vio.yaml"]},
+      {"name": "vision_bridge", "argv": ["python3", "-m", "onboard.vio.ev_bridge", "--ros-args", "--params-file", "{project}/onboard/config/vision_bridge.yaml"]},
+      {"name": "px4_odometry", "argv": ["python3", "{project}/onboard/adapters/px4_odom.py", "--ros-args", "--params-file", "{project}/onboard/config/common.yaml"]}
+    ],
+    "gnss": [
+      {"name": "px4_health", "argv": ["python3", "{project}/onboard/adapters/px4_health.py", "--ros-args", "--params-file", "{project}/onboard/config/common.yaml", "-p", "health_topic:=/estimator/healthy"]},
+      {"name": "px4_odometry", "argv": ["python3", "{project}/onboard/adapters/px4_odom.py", "--ros-args", "--params-file", "{project}/onboard/config/common.yaml"]}
+    ]
+  }
+}

@@ -1,0 +1,12 @@
+/**:
+  ros__parameters:
+    # Hardware defaults. Launch with use_sim_time in an ordinary ROS simulation.
+    use_sim_time: false
+    odom_topic: /visual_slam/tracking/odometry
+    health_topic: /estimator/healthy
+    world: flu
+    # Unreferenced startup heading stays FRD. A surveyed reference must supply
+    # BOTH heading_enu_rad and heading_reference; the bridge then rotates it.
+    required_fields: [position, orientation]
+    max_sample_age_s: 0.3
+    health_quiet_s: 5.0

@@ -1,0 +1,12 @@
+# depthai_ros_driver parameters for the OAK-D S2 (TEMPLATE: verify on the drone).
+# Match what the policy was trained around: stereo depth aligned to a mono camera, ~640x400, ~15 Hz,
+# depth in millimetres (16UC1, 0 = invalid). The policy node re-projects into its own 72x50 deg / 128x80 camera.
+/oak:
+  ros__parameters:
+    camera:
+      i_pipeline_type: Depth
+    stereo:
+      i_align_depth: false
+      i_width: 640
+      i_height: 400
+      i_fps: 15.0

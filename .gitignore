@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+.onboard/
+*.mcap
+*.db3

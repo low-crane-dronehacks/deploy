@@ -1,0 +1,17 @@
+/**:
+  ros__parameters:
+    use_sim_time: false
+    left_frame: oak_left
+    right_frame: oak_right
+    imu_frame: oak_imu
+    base_frame: base_link
+    odom_frame: odom
+    imu: true
+    imu_frequency: 500.0
+    gyro_noise_density: 0.00244
+    gyro_random_walk: 0.00005
+    accel_noise_density: 0.01862
+    accel_random_walk: 0.001
+    min_visual_obs: 10
+    imu_only_policy: publish
+    processing_status_topic: /visual_slam/processing_status
