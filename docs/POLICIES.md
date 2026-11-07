@@ -2,7 +2,8 @@
 
 | file | trained | what it can do |
 |---|---|---|
-| `policies/cur4_real_s5_1550.npz` | same realism curriculum, seed 5 (dronehacks-sim-eval `cur4_realfull_s5` @1550) | **73% from launch** on the `real` preset (512 deterministic launches; collision 5.5%, floor 17%). Current best, 2026-11-07 12:20 UTC. numpy vs torch max diff 7.2e-7 |
+| `policies/cur4_netrand_1300.npz` | s5_1550 fine-tuned with the stereo net-return rate drawn per episode from U(0, 0.15) (dronehacks-sim-eval `cur4_s5ft_netrand` @1300) | **Recommended: robust to how the net shows up in depth.** From launch on `real`: 68.9% at the default 3% net returns (512 launches), 44.5% at 0%, 68.8% at 10% (128 each). At 0% most extra failures fly through the unseen net. 2026-11-07 |
+| `policies/cur4_real_s5_1550.npz` | same realism curriculum, seed 5 (dronehacks-sim-eval `cur4_realfull_s5` @1550) | **73% from launch** on the `real` preset (512 deterministic launches; collision 5.5%, floor 17%). Highest at the default 3% net returns, but brittle: 42% at 0% returns, 18% at 10%. numpy vs torch max diff 7.2e-7 |
 | `policies/cur4_real_s2_700.npz` | realism curriculum: net+frame -> +stereo depth -> all effects at 640x400 stereo (dronehacks-sim-eval `cur4_realfull_s2` @700) | **57% from launch** on the `real` preset (all effects, eval-grade stereo; 128 deterministic launches); only 1-10% in the ideal sim (it expects realistic stereo). Superseded by s5_1550 |
 | `policies/comp_v3_s1.npz` | real course, ideal sim, v3 starts (any launch heading) | 92% success from the launch mark in our sim; 1.1 pts with a see-through net (flies out), 0 with stereo depth |
 | `policies/comp_s2.npz` | real course, launch only at 134.6 deg | superseded: scores 0 facing north (the organizers' start) |
