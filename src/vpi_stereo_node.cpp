@@ -13,6 +13,8 @@
 #include <vpi/Image.h>
 #include <vpi/Status.h>
 #include <vpi/Stream.h>
+#include <vpi/WarpMap.h>
+#include <vpi/algo/Remap.h>
 #include <vpi/algo/StereoDisparity.h>
 
 #include <opencv2/calib3d.hpp>
@@ -96,6 +98,10 @@ class VpiStereo : public rclcpp::Node {
     min_m_ = declare_parameter<double>("min_depth_m", 0.2);
     max_m_ = declare_parameter<double>("max_depth_m", 20.0);
     integer_ = declare_parameter<bool>("integer_disparity", false);
+    // Rectify on the GPU (VPI CUDA Remap) instead of OpenCV on the CPU: ~7 ms less CPU per pair and ~0.5 ms less
+    // latency, but VPI's bilinear sampling differs from OpenCV's by up to a few grey levels, so the depth is not
+    // bit-identical to the CPU path (~1.7% of pixels change valid/invalid on the OAK test pairs).
+    gpu_rectify_ = declare_parameter<bool>("gpu_rectify", false);
     out_w_ = declare_parameter<int>("out_w", 640);
     out_h_ = declare_parameter<int>("out_h", 400);
     rate_hz_ = declare_parameter<double>("rate_hz", 15.0);
@@ -131,14 +137,16 @@ class VpiStereo : public rclcpp::Node {
     pub_ = create_publisher<Image>("/policynav/depth/image", qos);
     pub_info_ = create_publisher<CameraInfo>("/policynav/depth/camera_info", qos);
     VPI_CHECK(vpiStreamCreate(VPI_BACKEND_CUDA, &stream_));
-    RCLCPP_INFO(get_logger(), "VPI stereo (CUDA): max disparity %d, window %d, confidence >= %d, <= %.1f Hz, %dx%d",
-                max_disp_, window_, conf_thr_, rate_hz_, out_w_, out_h_);
+    RCLCPP_INFO(get_logger(),
+                "VPI stereo (CUDA): max disparity %d, window %d, confidence >= %d, <= %.1f Hz, %dx%d, rectify on %s",
+                max_disp_, window_, conf_thr_, rate_hz_, out_w_, out_h_, gpu_rectify_ ? "GPU (VPI)" : "CPU (OpenCV)");
   }
 
   ~VpiStereo() override {
     if (stream_) vpiStreamSync(stream_);
-    if (payload_) vpiPayloadDestroy(payload_);
-    for (VPIImage im : {in8_l_, in8_r_, disp_, conf_})
+    for (VPIPayload p : {payload_, remap_[0], remap_[1]})
+      if (p) vpiPayloadDestroy(p);
+    for (VPIImage im : {in8_l_, in8_r_, disp_, conf_, raw_[0], raw_[1]})
       if (im) vpiImageDestroy(im);
     if (stream_) vpiStreamDestroy(stream_);
   }
@@ -191,6 +199,15 @@ class VpiStereo : public rclcpp::Node {
     // form tile by tile on every call, so converting once gives a bit-identical image for less work per frame.
     cv::convertMaps(f1x, f1y, m1x_, m1y_, CV_16SC2);
     cv::convertMaps(f2x, f2y, m2x_, m2y_, CV_16SC2);
+    if (gpu_rectify_) {
+      try {
+        remap_[0] = make_remap(f1x, f1y);
+        remap_[1] = make_remap(f2x, f2y);
+      } catch (const std::exception& e) {
+        RCLCPP_ERROR(get_logger(), "VPI remap setup failed, rectifying on the CPU: %s", e.what());
+        gpu_rectify_ = false;
+      }
+    }
     fx_ = P1.at<double>(0, 0);
     cx_ = P1.at<double>(0, 2);
     cy_ = P1.at<double>(1, 2);
@@ -240,6 +257,28 @@ class VpiStereo : public rclcpp::Node {
     }
   }
 
+  // VPI CUDA remap payload from an OpenCV float map pair (output pixel -> source pixel): a dense warp grid.
+  VPIPayload make_remap(const cv::Mat& mx, const cv::Mat& my) {
+    VPIWarpMap wm;
+    std::memset(&wm, 0, sizeof(wm));
+    wm.grid.numHorizRegions = 1;
+    wm.grid.numVertRegions = 1;
+    wm.grid.regionWidth[0] = static_cast<int16_t>(mx.cols);
+    wm.grid.regionHeight[0] = static_cast<int16_t>(mx.rows);
+    wm.grid.horizInterval[0] = 1;
+    wm.grid.vertInterval[0] = 1;
+    VPI_CHECK(vpiWarpMapAllocData(&wm));
+    for (int y = 0; y < mx.rows; ++y) {
+      auto* row = reinterpret_cast<VPIKeypointF32*>(reinterpret_cast<uint8_t*>(wm.keypoints) + y * wm.pitchBytes);
+      for (int x = 0; x < mx.cols; ++x) row[x] = VPIKeypointF32{mx.at<float>(y, x), my.at<float>(y, x)};
+    }
+    VPIPayload p = nullptr;
+    const VPIStatus st = vpiCreateRemap(VPI_BACKEND_CUDA, &wm, &p);
+    vpiWarpMapFreeData(&wm);
+    VPI_CHECK(st);
+    return p;
+  }
+
   void setup_vpi(int w, int h) {
     w_ = w;
     h_ = h;
@@ -248,6 +287,8 @@ class VpiStereo : public rclcpp::Node {
     VPI_CHECK(vpiImageCreate(w, h, VPI_IMAGE_FORMAT_U8, flags, &in8_r_));
     VPI_CHECK(vpiImageCreate(w, h, VPI_IMAGE_FORMAT_S16, flags, &disp_));
     VPI_CHECK(vpiImageCreate(w, h, VPI_IMAGE_FORMAT_U16, flags, &conf_));
+    if (gpu_rectify_)
+      for (VPIImage& im : raw_) VPI_CHECK(vpiImageCreate(src_w_, src_h_, VPI_IMAGE_FORMAT_U8, flags, &im));
     VPIStereoDisparityEstimatorCreationParams cp;
     VPI_CHECK(vpiInitStereoDisparityEstimatorCreationParams(&cp));
     cp.maxDisparity = max_disp_;
@@ -256,6 +297,20 @@ class VpiStereo : public rclcpp::Node {
     VPI_CHECK(vpiCreateStereoDisparityEstimator(VPI_BACKEND_CUDA, w, h, VPI_IMAGE_FORMAT_U8, &cp, &payload_));
     rect_stamp_[0] = rect_stamp_[1] = -1;
     RCLCPP_INFO(get_logger(), "VPI images %dx%d ready", w, h);
+  }
+
+  // GPU path: copy the raw image into its VPI image and queue the CUDA remap into the eye's VPI input (no sync; the
+  // stream orders it before the SGM). Syncing first makes sure no earlier remap still reads the raw image.
+  void rectify_gpu(int eye, const Image& m) {
+    VPI_CHECK(vpiStreamSync(stream_));
+    VPIImageData d;
+    VPI_CHECK(vpiImageLockData(raw_[eye], VPI_LOCK_WRITE, VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR, &d));
+    const auto& pl = d.buffer.pitch.planes[0];
+    cv::Mat(m.height, m.width, CV_8UC1, const_cast<uint8_t*>(m.data.data()), m.step)
+        .copyTo(cv::Mat(m.height, m.width, CV_8UC1, pl.data, pl.pitchBytes));
+    VPI_CHECK(vpiImageUnlock(raw_[eye]));
+    VPI_CHECK(vpiSubmitRemap(stream_, VPI_BACKEND_CUDA, remap_[eye], raw_[eye], eye == 0 ? in8_l_ : in8_r_,
+                             VPI_INTERP_LINEAR, VPI_BORDER_ZERO, 0));
   }
 
   // rectify a raw mono8 ROS image straight into the VPI U8 image's host memory (one pass, no extra copy)
@@ -279,7 +334,8 @@ class VpiStereo : public rclcpp::Node {
     const int64_t st = stamp_ns(m.header.stamp);
     if (rect_stamp_[eye] == st) return;
     rect_stamp_[eye] = -1;                                  // invalid while being overwritten (or if it throws)
-    if (eye == 0) rectify_into(m, m1x_, m1y_, in8_l_);
+    if (gpu_rectify_) rectify_gpu(eye, m);
+    else if (eye == 0) rectify_into(m, m1x_, m1y_, in8_l_);
     else rectify_into(m, m2x_, m2y_, in8_r_);
     rect_stamp_[eye] = st;
   }
@@ -298,7 +354,7 @@ class VpiStereo : public rclcpp::Node {
       RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 5000, "VPI: %s", e.what());
       return;
     }
-    times_.add("2a rectify ahead of partner (CPU)", ms_since(ts));
+    times_.add("2a rectify ahead of partner", ms_since(ts));
   }
 
   void try_pair() {
@@ -345,7 +401,7 @@ class VpiStereo : public rclcpp::Node {
       auto ts = std::chrono::steady_clock::now();
       rectify_eye(0, l);                                    // usually done already, in on_image()
       rectify_eye(1, r);
-      times_.add("2 rectify at pair (CPU)", ms_since(ts));
+      times_.add("2 rectify at pair", ms_since(ts));
       ts = std::chrono::steady_clock::now();
       VPIStereoDisparityEstimatorParams sp;
       VPI_CHECK(vpiInitStereoDisparityEstimatorParams(&sp));
@@ -421,7 +477,7 @@ class VpiStereo : public rclcpp::Node {
 
   int max_disp_, window_, conf_thr_, out_w_, out_h_;
   double min_m_, max_m_, rate_hz_, slop_s_;
-  bool integer_;
+  bool integer_, gpu_rectify_;
   int w_ = 0, h_ = 0;
   uint32_t src_w_ = 0, src_h_ = 0;
   size_t unpaired_ = 0, n_pairs_ = 0, n_decimated_ = 0;
@@ -437,6 +493,8 @@ class VpiStereo : public rclcpp::Node {
   VPIStream stream_ = nullptr;
   VPIPayload payload_ = nullptr;
   VPIImage in8_l_ = nullptr, in8_r_ = nullptr, disp_ = nullptr, conf_ = nullptr;
+  VPIImage raw_[2] = {nullptr, nullptr};                   // gpu_rectify: raw left / right
+  VPIPayload remap_[2] = {nullptr, nullptr};
   Image::ConstSharedPtr left_, right_;
   CameraInfo::ConstSharedPtr info_l_, info_r_;
   tf2_ros::Buffer tf_buffer_;
