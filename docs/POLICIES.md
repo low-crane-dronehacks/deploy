@@ -2,6 +2,7 @@
 
 | file | trained | what it can do |
 |---|---|---|
+| `policies/cur4_real_s2_700.npz` | realism curriculum: net+frame -> +stereo depth -> all effects at 640x400 stereo (dronehacks-sim-eval `cur4_realfull_s2` @700) | **57% from launch** on the `real` preset (all effects, eval-grade stereo; 128 deterministic launches); only 1-10% in the ideal sim (it expects realistic stereo). Provisional best, 2026-11-07 |
 | `policies/comp_v3_s1.npz` | real course, ideal sim, v3 starts (any launch heading) | 92% success from the launch mark in our sim; 1.1 pts with a see-through net (flies out), 0 with stereo depth |
 | `policies/comp_s2.npz` | real course, launch only at 134.6 deg | superseded: scores 0 facing north (the organizers' start) |
 
