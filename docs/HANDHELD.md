@@ -13,7 +13,7 @@ ros2 topic pub --once /policynav/handheld/reset std_msgs/msg/Empty {}           
 ```
 
 ## Options
-- `policy:=policies/<name>.npz`. The default is the launch file's; use `cur4_clean50_800` for now.
+- `policy:=policies/<name>.npz` (default `cur4_clean50_800`, the policy that works on both stereo and clean depth).
 - **`state`** (where velocity and attitude come from):
   - `px4`: a Pixhawk over USB, read only. Gives PX4's estimate plus the VL53L1X rangefinder.
   - `odom`: cuVSLAM odometry, with velocity differenced from the pose.

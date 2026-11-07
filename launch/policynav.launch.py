@@ -101,7 +101,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('hardware', default_value='sitl', description='drone | sitl | flyx | handheld'),
         DeclareLaunchArgument('arm', default_value='false', description='true = may arm and fly (operator approval)'),
-        DeclareLaunchArgument('policy', default_value='policies/comp_s2.npz'),
+        DeclareLaunchArgument('policy', default_value='policies/cur4_clean50_800.npz'),
         DeclareLaunchArgument('fc_device', default_value='/dev/ttyTHS1',
                               description='drone: Pixhawk UART (handheld over USB: /dev/ttyACM0)'),
         # handheld only
