@@ -7,7 +7,7 @@
        TF  <left frame> -> <left frame>_rect  (the rectification rotation, static)
        /policynav/depth/stats        JSON: matcher, ms per frame, valid fraction, dropped pairs
 
-VPI census+SGM on CUDA by default (backend:=sgbm for OpenCV). Matching runs at most rate_hz (15 Hz, as trained);
+VPI census+SGM on CUDA by default (backend:=sgbm for OpenCV). Matching runs at an average rate_hz (default 13.5 Hz, decimated by camera stamps);
 pairs arriving while busy are dropped, never queued.
 """
 from __future__ import annotations
@@ -53,7 +53,7 @@ class DepthNode(Node):
                                 max_disparity=int(dp('max_disparity', 96)), window=int(dp('window', 5)),
                                 conf_threshold=int(dp('conf_threshold', 32767)),
                                 integer_disparity=bool(dp('integer_disparity', False)))
-        self.rate_hz = float(dp('rate_hz', 15.0))
+        self.rate_hz = float(dp('rate_hz', 13.5))
         self.slop = float(dp('sync_slop_s', 0.005))
         ns_l, ns_r = dp('left_ns', '/oak/left'), dp('right_ns', '/oak/right')
         img_topic = dp('image_topic', 'image_mono')            # skybeta publishes image_mono (mono8) + image_raw (bgr8)
@@ -68,7 +68,7 @@ class DepthNode(Node):
         self.info = {}
         self.maps = None
         self.last = {'l': None, 'r': None}
-        self.t_last = 0.0
+        self.gate = S.RateGate(self.rate_hz)
         self.n = {'pairs': 0, 'dropped': 0, 'unsynced': 0}
         self.ms, self.valid = [], []
         for side, ns in (('l', ns_l), ('r', ns_r)):
@@ -149,11 +149,9 @@ class DepthNode(Node):
             self.n['unsynced'] += 1
             return
         self.last = {'l': None, 'r': None}
-        now = time.monotonic()
-        if now - self.t_last < 1.0 / self.rate_hz:
+        if not self.gate.accept(tl):                  # by camera stamp: average exactly rate_hz
             self.n['dropped'] += 1
             return
-        self.t_last = now
         self._process(l, r)
 
     def _process(self, l, r):

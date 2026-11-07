@@ -177,3 +177,21 @@ def make_matcher(p: StereoParams, backend: str = 'auto'):
             if backend == 'vpi':
                 raise
     return SgbmMatcher(p), 'sgbm'
+
+
+class RateGate:
+    """Decimate a frame stream to an average ``rate_hz`` by its timestamps (not by wall-clock gaps): a 30 fps camera
+    at 13.5 Hz yields alternating 2- and 3-frame gaps. A min-gap limiter would round every gap UP to the next
+    whole frame (13.5 Hz -> 10 Hz; 15 Hz -> a jitter-dependent mix of 15 and 10 Hz)."""
+
+    def __init__(self, rate_hz: float):
+        self.period = 1.0 / rate_hz
+        self.next = None
+
+    def accept(self, t: float) -> bool:
+        if self.next is None or t >= self.next + 2 * self.period:      # start, or a long gap: resync
+            self.next = t
+        if t + 1e-4 < self.next:
+            return False
+        self.next += self.period
+        return True

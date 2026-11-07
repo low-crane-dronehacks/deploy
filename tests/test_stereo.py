@@ -104,3 +104,12 @@ def test_skybeta_camera_info_is_not_a_rectified_pair():
     P_r = _P(640.10, 516.87, 320.29)
     assert not S.camera_info_is_rectified_pair(P_l, P_r, np.eye(3), np.eye(3))
     assert S.camera_info_is_rectified_pair(_P(500, 320, 200), _P(500, 320, 200, tx=-500 * B), np.eye(3), np.eye(3))
+
+
+@pytest.mark.parametrize('rate', [13.5, 15.0, 10.0])
+def test_rate_gate_hits_the_average_rate_from_30fps(rate):
+    g = S.RateGate(rate)
+    rng = np.random.default_rng(0)
+    stamps = np.arange(0, 20.0, 1 / 30.0) + rng.normal(0, 0.002, 600)    # 30 fps with 2 ms jitter
+    n = sum(g.accept(float(t)) for t in stamps)
+    assert abs(n / 20.0 - rate) < 0.15

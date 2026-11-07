@@ -30,7 +30,7 @@ ARGUMENTS = [
     ('policy', 'policies/cur4_clean50_800.npz', 'exported policy (.npz), relative to the package share'),
     ('stereo_backend', 'vpi', 'vpi (C++ vpi_stereo, CUDA census+SGM) | sgbm (OpenCV, CPU, ~29 ms at 640x400 on 6 cores)'),
     ('max_disparity', '96', 'stereo search range at 640 px: min range = f*B/max (~0.33 m at 96, 0.40 m at 80)'),
-    ('depth_rate_hz', '15.0', 'stereo rate (training: 15 Hz frames)'),
+    ('depth_rate_hz', '13.5', 'stereo rate, averaged by camera stamps (training models 13.5-15 Hz frames)'),
     ('speed_cap', '1.45', 'our own cap on |v| (m/s), under the interface clamp'),
     ('yaw_rate_cap', '0.6', 'rad/s; the interface does not limit yaw, and stereo VO loses track when spun fast'),
     ('max_flight_s', '120.0', 'then /skybeta/hold'),
