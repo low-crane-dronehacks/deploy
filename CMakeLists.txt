@@ -35,7 +35,8 @@ find_package(ZLIB REQUIRED)
 find_package(Eigen3 REQUIRED NO_MODULE)
 add_library(policynav_core STATIC
   src/policy/npz.cpp
-  src/policy/obs.cpp)
+  src/policy/obs.cpp
+  src/policy/decision_gate.cpp)
 # obs.cpp mirrors NumPy's float64 operation order (floor() bin decisions): no fused multiply-adds there.
 set_source_files_properties(src/policy/obs.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
 set_target_properties(policynav_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -43,6 +44,13 @@ target_compile_features(policynav_core PUBLIC cxx_std_17)
 target_compile_options(policynav_core PRIVATE -O3 -Wall -Wextra)
 target_include_directories(policynav_core PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 target_link_libraries(policynav_core PRIVATE ZLIB::ZLIB Eigen3::Eigen)
+add_executable(policy_core_decision_gate_test tests/policy_core/decision_gate_test.cpp)
+target_link_libraries(policy_core_decision_gate_test policynav_core)
+install(TARGETS policy_core_decision_gate_test DESTINATION lib/${PROJECT_NAME})
+if(BUILD_TESTING)
+  enable_testing()
+  add_test(NAME policy_core_decision_gate COMMAND policy_core_decision_gate_test)
+endif()
 
 ament_python_install_package(${PROJECT_NAME})
 install(PROGRAMS scripts/skybeta_policy scripts/stereo_depth scripts/handheld DESTINATION lib/${PROJECT_NAME})
