@@ -13,7 +13,6 @@
 #include <vpi/Image.h>
 #include <vpi/Status.h>
 #include <vpi/Stream.h>
-#include <vpi/algo/ConvertImageFormat.h>
 #include <vpi/algo/StereoDisparity.h>
 
 #include <opencv2/calib3d.hpp>
@@ -138,7 +137,7 @@ class VpiStereo : public rclcpp::Node {
   ~VpiStereo() override {
     if (stream_) vpiStreamSync(stream_);
     if (payload_) vpiPayloadDestroy(payload_);
-    for (VPIImage im : {in8_l_, in8_r_, in16_l_, in16_r_, disp_, conf_})
+    for (VPIImage im : {in8_l_, in8_r_, disp_, conf_})
       if (im) vpiImageDestroy(im);
     if (stream_) vpiStreamDestroy(stream_);
   }
@@ -224,14 +223,14 @@ class VpiStereo : public rclcpp::Node {
     const uint64_t flags = VPI_BACKEND_CUDA | VPI_BACKEND_CPU;
     VPI_CHECK(vpiImageCreate(w, h, VPI_IMAGE_FORMAT_U8, flags, &in8_l_));
     VPI_CHECK(vpiImageCreate(w, h, VPI_IMAGE_FORMAT_U8, flags, &in8_r_));
-    VPI_CHECK(vpiImageCreate(w, h, VPI_IMAGE_FORMAT_Y16_ER, flags, &in16_l_));
-    VPI_CHECK(vpiImageCreate(w, h, VPI_IMAGE_FORMAT_Y16_ER, flags, &in16_r_));
     VPI_CHECK(vpiImageCreate(w, h, VPI_IMAGE_FORMAT_S16, flags, &disp_));
     VPI_CHECK(vpiImageCreate(w, h, VPI_IMAGE_FORMAT_U16, flags, &conf_));
     VPIStereoDisparityEstimatorCreationParams cp;
     VPI_CHECK(vpiInitStereoDisparityEstimatorCreationParams(&cp));
     cp.maxDisparity = max_disp_;
-    VPI_CHECK(vpiCreateStereoDisparityEstimator(VPI_BACKEND_CUDA, w, h, VPI_IMAGE_FORMAT_Y16_ER, &cp, &payload_));
+    // CUDA SGM takes U8 directly (VPI 3.2 StereoDisparity.h); census is rank-based, so matching U8 gives the same
+    // disparity + confidence bit for bit as the old U8 -> Y16_ER conversion pass, minus that pass.
+    VPI_CHECK(vpiCreateStereoDisparityEstimator(VPI_BACKEND_CUDA, w, h, VPI_IMAGE_FORMAT_U8, &cp, &payload_));
     RCLCPP_INFO(get_logger(), "VPI images %dx%d ready", w, h);
   }
 
@@ -294,19 +293,15 @@ class VpiStereo : public rclcpp::Node {
       rectify_into(r, m2x_, m2y_, in8_r_);
       times_.add("2 rectify x2 (CPU)", ms_since(ts));
       ts = std::chrono::steady_clock::now();
-      VPIConvertImageFormatParams cvp;
-      VPI_CHECK(vpiInitConvertImageFormatParams(&cvp));
-      VPI_CHECK(vpiSubmitConvertImageFormat(stream_, VPI_BACKEND_CUDA, in8_l_, in16_l_, &cvp));
-      VPI_CHECK(vpiSubmitConvertImageFormat(stream_, VPI_BACKEND_CUDA, in8_r_, in16_r_, &cvp));
       VPIStereoDisparityEstimatorParams sp;
       VPI_CHECK(vpiInitStereoDisparityEstimatorParams(&sp));
       sp.windowSize = window_;
       sp.maxDisparity = max_disp_;
       sp.confidenceThreshold = conf_thr_;
-      VPI_CHECK(vpiSubmitStereoDisparityEstimator(stream_, VPI_BACKEND_CUDA, payload_, in16_l_, in16_r_, disp_, conf_,
+      VPI_CHECK(vpiSubmitStereoDisparityEstimator(stream_, VPI_BACKEND_CUDA, payload_, in8_l_, in8_r_, disp_, conf_,
                                                   &sp));
       VPI_CHECK(vpiStreamSync(stream_));
-      times_.add("3 VPI convert+SGM (GPU)", ms_since(ts));
+      times_.add("3 VPI SGM (GPU)", ms_since(ts));
     } catch (const std::exception& e) {
       RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 5000, "VPI: %s", e.what());
       return;
@@ -387,7 +382,7 @@ class VpiStereo : public rclcpp::Node {
   cv::Mat m1x_, m1y_, m2x_, m2y_;
   VPIStream stream_ = nullptr;
   VPIPayload payload_ = nullptr;
-  VPIImage in8_l_ = nullptr, in8_r_ = nullptr, in16_l_ = nullptr, in16_r_ = nullptr, disp_ = nullptr, conf_ = nullptr;
+  VPIImage in8_l_ = nullptr, in8_r_ = nullptr, disp_ = nullptr, conf_ = nullptr;
   Image::ConstSharedPtr left_, right_;
   CameraInfo::ConstSharedPtr info_l_, info_r_;
   tf2_ros::Buffer tf_buffer_;
