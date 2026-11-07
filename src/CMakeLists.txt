@@ -58,7 +58,7 @@ if(BUILD_TESTING)
   endif()
 endif()
 
-# 3. ROS 2 Nodes (colcon build --base-paths src)
+# 3. ROS 2 Nodes (colcon build --base-paths src) — supports both ROS 2 Humble (Ubuntu 22.04) and ROS 2 Jazzy (Ubuntu 24.04)
 find_package(ament_cmake QUIET)
 find_package(px4_msgs QUIET)
 if(ament_cmake_FOUND AND px4_msgs_FOUND)
@@ -70,16 +70,22 @@ if(ament_cmake_FOUND AND px4_msgs_FOUND)
   find_package(tf2_ros REQUIRED)
 
   add_executable(maze_planning_node ros/maze_planning_node.cpp)
-  target_link_libraries(maze_planning_node maze_planning_core rclcpp::rclcpp tf2_ros::tf2_ros
-    ${sensor_msgs_TARGETS} ${nav_msgs_TARGETS} ${std_msgs_TARGETS} ${geometry_msgs_TARGETS} ${px4_msgs_TARGETS})
+  target_link_libraries(maze_planning_node maze_planning_core)
+  ament_target_dependencies(maze_planning_node
+    rclcpp tf2_ros sensor_msgs nav_msgs std_msgs geometry_msgs px4_msgs
+  )
 
   add_executable(path_transformer_node ros/path_transformer_node.cpp)
-  target_link_libraries(path_transformer_node maze_planning_core rclcpp::rclcpp tf2_ros::tf2_ros
-    ${nav_msgs_TARGETS} ${std_msgs_TARGETS} ${geometry_msgs_TARGETS})
+  target_link_libraries(path_transformer_node maze_planning_core)
+  ament_target_dependencies(path_transformer_node
+    rclcpp tf2_ros nav_msgs std_msgs geometry_msgs
+  )
 
   add_executable(control_mux_node ros/control_mux_node.cpp)
-  target_link_libraries(control_mux_node maze_planning_core rclcpp::rclcpp
-    ${nav_msgs_TARGETS} ${std_msgs_TARGETS} ${px4_msgs_TARGETS})
+  target_link_libraries(control_mux_node maze_planning_core)
+  ament_target_dependencies(control_mux_node
+    rclcpp nav_msgs std_msgs px4_msgs
+  )
 
   install(TARGETS maze_planning_core
     ARCHIVE DESTINATION lib
@@ -93,8 +99,9 @@ if(ament_cmake_FOUND AND px4_msgs_FOUND)
   if(GTSAM_FOUND)
     add_executable(isam2_depth_node ros/isam2_depth_node.cpp)
     target_link_libraries(isam2_depth_node isam2_depth_core maze_planning_core)
-    target_link_libraries(isam2_depth_node rclcpp::rclcpp tf2_ros::tf2_ros
-      ${sensor_msgs_TARGETS} ${nav_msgs_TARGETS} ${px4_msgs_TARGETS})
+    ament_target_dependencies(isam2_depth_node
+      rclcpp tf2_ros sensor_msgs nav_msgs px4_msgs
+    )
     install(TARGETS isam2_depth_node DESTINATION lib/${PROJECT_NAME})
   endif()
 

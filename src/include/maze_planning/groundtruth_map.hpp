@@ -167,6 +167,10 @@ class GroundTruthMap {
   std::size_t numBoulders() const { return boulders_.size(); }
   std::size_t numTriangles() const { return triangles_.size(); }
   std::size_t numBVHNodes() const { return bvh_nodes_.size(); }
+  const std::vector<OBBSlabPrimitive>& obbSlabs() const { return obb_slabs_; }
+  const std::vector<BoulderPrimitive>& boulders() const { return boulders_; }
+  const TunnelArchPrimitive& tunnelArch() const { return tunnel_; }
+  const std::vector<SurfaceTriangle>& triangles() const { return triangles_; }
   const std::vector<GateAperture>& defaultGates() const { return default_gates_; }
   Eigen::Vector3d launchMarkNed() const { return launch_mark_ned_; }
   Eigen::Vector3d padCenterNed() const { return pad_center_ned_; }

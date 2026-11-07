@@ -49,13 +49,16 @@ def _setup(context):
     mode = LaunchConfiguration("mode").perform(context)
     mppi_samples = LaunchConfiguration("mppi_samples").perform(context)
     cruise_speed = LaunchConfiguration("cruise_speed_m_s").perform(context)
+    sim_loopback = LaunchConfiguration("sim_loopback").perform(context)
+    inject_demo_pillar = LaunchConfiguration("inject_demo_pillar").perform(context)
+    rviz = LaunchConfiguration("rviz").perform(context)
     gt_map_path = LaunchConfiguration("groundtruth_map_path").perform(context)
     if not os.path.isabs(gt_map_path):
         gt_map_path = os.path.join(ROOT, gt_map_path)
 
     actions = [
         LogInfo(
-            msg=f"maze_autonomy: hardware={hw} mode={mode} arm={arm} mppi_samples={mppi_samples} speed={cruise_speed} gt_map={gt_map_path}"
+            msg=f"maze_autonomy: hardware={hw} mode={mode} arm={arm} mppi_samples={mppi_samples} speed={cruise_speed} sim_loopback={sim_loopback} rviz={rviz}"
         )
     ]
 
@@ -81,7 +84,7 @@ def _setup(context):
             ),
         ]
 
-    sim_time_str = str(p["use_sim_time"]).lower()
+    sim_time_str = "false" if sim_loopback.lower() == "true" else str(p["use_sim_time"]).lower()
 
     # 1. Maze Planning Node (RRT* + PathTransformer + VoxelCostmap + 2048-rollout MPPI)
     plan_bin = os.path.join(ROOT, "install", "isam2_depth", "lib", "isam2_depth", "maze_planning_node")
@@ -99,6 +102,10 @@ def _setup(context):
                 f"mppi_num_samples:={mppi_samples}",
                 "-p",
                 f"cruise_speed_m_s:={cruise_speed}",
+                "-p",
+                f"sim_loopback:={sim_loopback.lower()}",
+                "-p",
+                f"inject_demo_pillar:={inject_demo_pillar.lower()}",
             ],
             cwd=ROOT,
             output="screen",
@@ -125,6 +132,17 @@ def _setup(context):
         )
     )
 
+    # 3. Optional RViz2 realtime 3D visualizer
+    if rviz.lower() == "true":
+        rviz_cfg = os.path.join(ROOT, "config", "maze_rviz.rviz")
+        actions.append(
+            ExecuteProcess(
+                cmd=["rviz2", "-d", rviz_cfg],
+                cwd=ROOT,
+                output="screen",
+            )
+        )
+
     return actions
 
 
@@ -136,6 +154,9 @@ def generate_launch_description():
             DeclareLaunchArgument("arm", default_value="false", description="true = arm and publish to PX4"),
             DeclareLaunchArgument("mppi_samples", default_value="2048", description="Number of MPPI rollouts"),
             DeclareLaunchArgument("cruise_speed_m_s", default_value="2.60", description="Nominal cruise speed m/s"),
+            DeclareLaunchArgument("sim_loopback", default_value="false", description="true = standalone closed-loop RViz demo without Gazebo"),
+            DeclareLaunchArgument("inject_demo_pillar", default_value="false", description="true = inject unmodeled vertical pole at [1.75, -2.51] for MPPI evasion demo"),
+            DeclareLaunchArgument("rviz", default_value="false", description="true = launch rviz2 with config/maze_rviz.rviz"),
             DeclareLaunchArgument("groundtruth_map_path", default_value="config/course_groundtruth.bin"),
             DeclareLaunchArgument("fc_device", default_value="/dev/ttyTHS1"),
             OpaqueFunction(function=_setup),

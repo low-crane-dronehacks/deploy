@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/transform_stamped.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <nav_msgs/msg/path.hpp>
@@ -18,6 +19,7 @@
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
 #include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_broadcaster.h>
 #include <tf2_ros/transform_listener.h>
 
 #include "maze_planning/groundtruth_map.hpp"
@@ -33,13 +35,16 @@ class MazePlanningNode : public rclcpp::Node {
   MazePlanningNode()
       : Node("maze_planning_node"),
         tf_buffer_(get_clock()),
-        tf_listener_(tf_buffer_) {
+        tf_listener_(tf_buffer_),
+        tf_broadcaster_(this) {
     const std::string gt_path =
         declare_parameter<std::string>("groundtruth_map_path", "config/course_groundtruth.bin");
     const std::string obj_path =
         declare_parameter<std::string>("course_obj_path", "sitl/world/course.obj");
     prefer_window_ = declare_parameter<bool>("prefer_window", true);
     include_return_leg_ = declare_parameter<bool>("include_return_leg", false);
+    sim_loopback_ = declare_parameter<bool>("sim_loopback", false);
+    inject_demo_pillar_ = declare_parameter<bool>("inject_demo_pillar", false);
     map_frame_ = declare_parameter<std::string>("map_frame", "map");
     odom_frame_ = declare_parameter<std::string>("odom_frame", "odom");
     base_frame_ = declare_parameter<std::string>("base_frame", "base_link");
@@ -54,6 +59,9 @@ class MazePlanningNode : public rclcpp::Node {
     VoxelCostmapConfig vcfg{};
     vcfg.max_sensor_range_m = declare_parameter<double>("max_sensor_range_m", 3.50);
     costmap_ = std::make_shared<VoxelCostmap>(vcfg, gt_map_);
+    if (inject_demo_pillar_) {
+      costmap_->injectUnmodeledPillar(Eigen::Vector2d(1.75, -2.5146), 0.10, 1.65, 0.0);
+    }
 
     RRTStarConfig rcfg{};
     rcfg.cruise_speed_m_s = declare_parameter<double>("cruise_speed_m_s", 2.60);
@@ -75,12 +83,25 @@ class MazePlanningNode : public rclcpp::Node {
     rrt_planner_->planFullCourse(launch_pos, prefer_window_, include_return_leg_, global_path_map_);
     path_transformer_->setGlobalPathMap(global_path_map_);
 
-    // Publishers matching Section 2.3 Detailed Topic Specification
+    if (sim_loopback_) {
+      state_odom_.timestamp_s = get_clock()->now().seconds();
+      state_odom_.pos_odom = launch_pos;
+      state_odom_.vel_odom = Eigen::Vector3d::Zero();
+      state_odom_.q_odom_base = Eigen::Quaterniond::Identity();
+      state_odom_.tracking_valid = true;
+      has_odom_ = true;
+    }
+
+    // Publishers matching Section 2.3 Detailed Topic Specification + RViz visualization topics
     pub_global_rrt_ = create_publisher<nav_msgs::msg::Path>("/plan/global_rrt", 10);
     pub_local_ref_ = create_publisher<nav_msgs::msg::Path>("/plan/local_reference", 10);
+    pub_mppi_rollout_ = create_publisher<nav_msgs::msg::Path>("/plan/mppi_rollout", 10);
+    pub_drone_pose_ = create_publisher<geometry_msgs::msg::PoseStamped>("/viz/drone_pose", 10);
+    pub_map_cloud_ = create_publisher<sensor_msgs::msg::PointCloud2>("/viz/groundtruth_map_cloud", 1);
     pub_rl_lookaheads_ =
         create_publisher<std_msgs::msg::Float32MultiArray>("/plan/rl_lookaheads", 10);
     pub_costmap_ = create_publisher<nav_msgs::msg::OccupancyGrid>("/costmap/local_voxels", 10);
+    buildGroundTruthPointCloudMsg();
 
     rclcpp::QoS px4_qos(1);
     px4_qos.best_effort();
@@ -189,8 +210,41 @@ class MazePlanningNode : public rclcpp::Node {
     return msg;
   }
 
+  void buildGroundTruthPointCloudMsg() {
+    std::vector<Eigen::Vector3f> pts;
+    pts.reserve(18000);
+    for (double x = -2.95; x <= 2.95; x += 0.06) {
+      for (double y = -2.95; y <= 2.95; y += 0.06) {
+        for (double z = -1.70; z <= -0.05; z += 0.08) {
+          if (gt_map_->isStaticWallOccupied(Eigen::Vector3d(x, y, z))) {
+            pts.emplace_back(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
+          }
+        }
+      }
+    }
+    gt_cloud_msg_.header.frame_id = map_frame_;
+    gt_cloud_msg_.height = 1;
+    gt_cloud_msg_.width = static_cast<uint32_t>(pts.size());
+    sensor_msgs::PointCloud2Modifier mod(gt_cloud_msg_);
+    mod.setPointCloud2FieldsByString(1, "xyz");
+    mod.resize(pts.size());
+    sensor_msgs::PointCloud2Iterator<float> ix(gt_cloud_msg_, "x");
+    sensor_msgs::PointCloud2Iterator<float> iy(gt_cloud_msg_, "y");
+    sensor_msgs::PointCloud2Iterator<float> iz(gt_cloud_msg_, "z");
+    for (const auto& p : pts) {
+      *ix = p.x();
+      *iy = p.y();
+      *iz = p.z();
+      ++ix;
+      ++iy;
+      ++iz;
+    }
+  }
+
   void onGlobalTimer() {
     pub_global_rrt_->publish(toRosPath(global_path_map_, map_frame_));
+    gt_cloud_msg_.header.stamp = get_clock()->now();
+    pub_map_cloud_->publish(gt_cloud_msg_);
   }
 
   void onLocalRefTimer() {
@@ -238,6 +292,62 @@ class MazePlanningNode : public rclcpp::Node {
     }
     const TrajectorySetpointCmd cmd = mppi_->computeCommand(state_odom_, latest_local_ref_odom_);
 
+    // Publish MPPI optimal 16-step horizon rollout for RViz (/plan/mppi_rollout)
+    nav_msgs::msg::Path rollout_msg;
+    rollout_msg.header.stamp = get_clock()->now();
+    rollout_msg.header.frame_id = odom_frame_;
+    for (const auto& pt : mppi_->lastOptimalRollout()) {
+      geometry_msgs::msg::PoseStamped ps;
+      ps.header = rollout_msg.header;
+      ps.pose.position.x = pt.x();
+      ps.pose.position.y = pt.y();
+      ps.pose.position.z = pt.z();
+      ps.pose.orientation.w = 1.0;
+      rollout_msg.poses.push_back(ps);
+    }
+    pub_mppi_rollout_->publish(rollout_msg);
+
+    // Optional standalone closed-loop loopback integrator for RViz visualization without Gazebo
+    if (sim_loopback_) {
+      const double dt = 0.02;
+      state_odom_.timestamp_s += dt;
+      state_odom_.vel_odom = 0.80 * state_odom_.vel_odom + 0.20 * cmd.vel_ned;
+      state_odom_.pos_odom += state_odom_.vel_odom * dt;
+      const double next_yaw = state_odom_.yaw() + cmd.yawspeed_rad_s * dt;
+      state_odom_.q_odom_base = Eigen::Quaterniond(
+          std::cos(0.5 * next_yaw), 0.0, 0.0, std::sin(0.5 * next_yaw));
+
+      geometry_msgs::msg::TransformStamped tf_map_odom;
+      tf_map_odom.header.stamp = get_clock()->now();
+      tf_map_odom.header.frame_id = map_frame_;
+      tf_map_odom.child_frame_id = odom_frame_;
+      tf_map_odom.transform.rotation.w = 1.0;
+      tf_broadcaster_.sendTransform(tf_map_odom);
+    }
+
+    // Publish current drone pose + TF odom -> base_link for RViz
+    geometry_msgs::msg::PoseStamped pose_msg;
+    pose_msg.header.stamp = get_clock()->now();
+    pose_msg.header.frame_id = odom_frame_;
+    pose_msg.pose.position.x = state_odom_.pos_odom.x();
+    pose_msg.pose.position.y = state_odom_.pos_odom.y();
+    pose_msg.pose.position.z = state_odom_.pos_odom.z();
+    pose_msg.pose.orientation.w = state_odom_.q_odom_base.w();
+    pose_msg.pose.orientation.x = state_odom_.q_odom_base.x();
+    pose_msg.pose.orientation.y = state_odom_.q_odom_base.y();
+    pose_msg.pose.orientation.z = state_odom_.q_odom_base.z();
+    pub_drone_pose_->publish(pose_msg);
+
+    geometry_msgs::msg::TransformStamped tf_odom_base;
+    tf_odom_base.header.stamp = pose_msg.header.stamp;
+    tf_odom_base.header.frame_id = odom_frame_;
+    tf_odom_base.child_frame_id = base_frame_;
+    tf_odom_base.transform.translation.x = state_odom_.pos_odom.x();
+    tf_odom_base.transform.translation.y = state_odom_.pos_odom.y();
+    tf_odom_base.transform.translation.z = state_odom_.pos_odom.z();
+    tf_odom_base.transform.rotation = pose_msg.pose.orientation;
+    tf_broadcaster_.sendTransform(tf_odom_base);
+
     // 3. FMEA Pillar Dead-Center: if MPPI detects a blocked narrow corridor, mark edge in RRT* & replan
     if (cmd.request_global_replan) {
       const Eigen::Vector3d cur_map =
@@ -277,11 +387,14 @@ class MazePlanningNode : public rclcpp::Node {
 
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;
+  tf2_ros::TransformBroadcaster tf_broadcaster_;
   std::string map_frame_{"map"};
   std::string odom_frame_{"odom"};
   std::string base_frame_{"base_link"};
   bool prefer_window_{true};
   bool include_return_leg_{false};
+  bool sim_loopback_{false};
+  bool inject_demo_pillar_{false};
 
   std::shared_ptr<GroundTruthMap> gt_map_;
   std::shared_ptr<VoxelCostmap> costmap_;
@@ -293,9 +406,13 @@ class MazePlanningNode : public rclcpp::Node {
   PlannedPath latest_local_ref_odom_;
   VehicleKinematics state_odom_{};
   bool has_odom_{false};
+  sensor_msgs::msg::PointCloud2 gt_cloud_msg_;
 
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_global_rrt_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_local_ref_;
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_mppi_rollout_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_drone_pose_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_map_cloud_;
   rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr pub_rl_lookaheads_;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr pub_costmap_;
   rclcpp::Publisher<px4_msgs::msg::TrajectorySetpoint>::SharedPtr pub_traj_sp_;
