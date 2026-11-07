@@ -1,0 +1,74 @@
+# tests/policy_core/run_golden.sh output, 2026-11-07, Jetson Orin Nano, skybeta:0.3.2 (other builds running: timings indicative).
+# Inputs: scratch/depth_vpi.npz + depth_sgbm.npz (10 real 400x640 frames), 3 calibrations, 256 synthetic states.
+python: reproject 7.01 ms, policy forward 2.16 ms, full step 2.35 ms (median of 50, OPENBLAS_NUM_THREADS=1)
+wrote /out/golden_cur4_clean50_800.npz: 41 arrays, 3.3 MB
+policy /root/team_ws/src/deploy/policies/cur4_clean50_800.npz: source model_800.pt, 4 actions, proprio 10, features 778, hidden 128, depth 80x128 x2
+reprojection: 10 real frames 400x640, 3 calibrations
+  reproject cfg 0 (stride 2)                   max abs err 0.000e+00  (tol 1e-06) ok [0 of 102400 px differ]
+    axis_err_deg                               max abs err 0.000e+00  (tol 1e-09) ok 
+  reproject cfg 1 (stride 2)                   max abs err 0.000e+00  (tol 1e-06) ok [0 of 102400 px differ]
+    axis_err_deg                               max abs err 0.000e+00  (tol 1e-09) ok 
+  reproject cfg 2 (stride 1)                   max abs err 0.000e+00  (tol 1e-06) ok [0 of 102400 px differ]
+    axis_err_deg                               max abs err 0.000e+00  (tol 1e-09) ok 
+  decode_depth 16UC1                           max abs err 0.000e+00  (tol 0e+00) ok 
+  decode_depth 32FC1                           max abs err 0.000e+00  (tol 0e+00) ok 
+  proprio (256 synthetic states)               max abs err 0.000e+00  (tol 1e-06) ok 
+  action_to_setpoint vel_ned                   max abs err 0.000e+00  (tol 1e-09) ok 
+  action_to_setpoint yawspeed                  max abs err 0.000e+00  (tol 1e-12) ok 
+  policy forward, single steps (raw actions)   max abs err 9.537e-07  (tol 1e-04) ok [12 cases]
+  seq 40 steps action (clipped)                max abs err 5.364e-07  (tol 1e-04) ok 
+  seq 40 steps proprio (prev action fed back)  max abs err 5.364e-07  (tol 1e-04) ok 
+  seq 40 steps GRU hidden state                max abs err 2.015e-06  (tol 1e-04) ok 
+  seq 40 steps setpoint vel_ned [m/s]          max abs err 1.310e-06  (tol 5e-04) ok 
+  seq 40 steps setpoint yawspeed [rad/s]       max abs err 0.000e+00  (tol 2e-04) ok 
+  seq e2e (C++ reproj) action (clipped)        max abs err 5.364e-07  (tol 1e-04) ok 
+  seq e2e (C++ reproj) proprio (prev action fed back) max abs err 5.364e-07  (tol 1e-04) ok 
+  seq e2e (C++ reproj) GRU hidden state        max abs err 2.015e-06  (tol 1e-04) ok 
+  seq e2e (C++ reproj) setpoint vel_ned [m/s]  max abs err 1.310e-06  (tol 5e-04) ok 
+  seq e2e (C++ reproj) setpoint yawspeed [rad/s] max abs err 0.000e+00  (tol 2e-04) ok 
+timing (median of 50): C++ reproject 0.916 ms, policy forward 0.566 ms, full step 0.566 ms
+timing (median of 50): Python reproject 7.012 ms, policy forward 2.165 ms, full step 2.349 ms
+PASSED (0 failures)
+python: reproject 7.07 ms, policy forward 2.17 ms, full step 2.35 ms (median of 50, OPENBLAS_NUM_THREADS=1)
+wrote /out/golden_comp_s2.npz: 41 arrays, 3.3 MB
+policy /root/team_ws/src/deploy/policies/comp_s2.npz: source comp_s2.pt, 4 actions, proprio 10, features 778, hidden 128, depth 80x128 x2
+reprojection: 10 real frames 400x640, 3 calibrations
+  reproject cfg 0 (stride 2)                   max abs err 0.000e+00  (tol 1e-06) ok [0 of 102400 px differ]
+    axis_err_deg                               max abs err 0.000e+00  (tol 1e-09) ok 
+  reproject cfg 1 (stride 2)                   max abs err 0.000e+00  (tol 1e-06) ok [0 of 102400 px differ]
+    axis_err_deg                               max abs err 0.000e+00  (tol 1e-09) ok 
+  reproject cfg 2 (stride 1)                   max abs err 0.000e+00  (tol 1e-06) ok [0 of 102400 px differ]
+    axis_err_deg                               max abs err 0.000e+00  (tol 1e-09) ok 
+  decode_depth 16UC1                           max abs err 0.000e+00  (tol 0e+00) ok 
+  decode_depth 32FC1                           max abs err 0.000e+00  (tol 0e+00) ok 
+  proprio (256 synthetic states)               max abs err 0.000e+00  (tol 1e-06) ok 
+  action_to_setpoint vel_ned                   max abs err 0.000e+00  (tol 1e-09) ok 
+  action_to_setpoint yawspeed                  max abs err 0.000e+00  (tol 1e-12) ok 
+  policy forward, single steps (raw actions)   max abs err 9.537e-07  (tol 1e-04) ok [12 cases]
+  seq 40 steps action (clipped)                max abs err 7.749e-07  (tol 1e-04) ok 
+  seq 40 steps proprio (prev action fed back)  max abs err 6.557e-07  (tol 1e-04) ok 
+  seq 40 steps GRU hidden state                max abs err 2.742e-06  (tol 1e-04) ok 
+  seq 40 steps setpoint vel_ned [m/s]          max abs err 2.361e-06  (tol 5e-04) ok 
+  seq 40 steps setpoint yawspeed [rad/s]       max abs err 8.114e-07  (tol 2e-04) ok 
+  seq e2e (C++ reproj) action (clipped)        max abs err 7.749e-07  (tol 1e-04) ok 
+  seq e2e (C++ reproj) proprio (prev action fed back) max abs err 6.557e-07  (tol 1e-04) ok 
+  seq e2e (C++ reproj) GRU hidden state        max abs err 2.742e-06  (tol 1e-04) ok 
+  seq e2e (C++ reproj) setpoint vel_ned [m/s]  max abs err 2.361e-06  (tol 5e-04) ok 
+  seq e2e (C++ reproj) setpoint yawspeed [rad/s] max abs err 8.114e-07  (tol 2e-04) ok 
+timing (median of 50): C++ reproject 0.945 ms, policy forward 0.624 ms, full step 0.628 ms
+timing (median of 50): Python reproject 7.071 ms, policy forward 2.171 ms, full step 2.354 ms
+PASSED (0 failures)
+camera          mode          rate Hz   min ms   max ms  mean ms  10Hz-timer wait
+15 Hz +-2 ms    phase-locked    9.994     62.8    137.2    100.1          33.4 ms
+15 Hz +-2 ms    min-interval    7.500    129.5    137.2    133.3          33.4 ms
+13.5 Hz +-2 ms  phase-locked    9.996     70.4    151.9    100.0          37.1 ms
+13.5 Hz +-2 ms  min-interval    6.750    144.4    152.0    148.1          37.1 ms
+10 Hz +-2 ms    phase-locked   10.000     96.2    103.9    100.0          50.0 ms
+10 Hz +-2 ms    min-interval   10.000     96.2    103.9    100.0          50.0 ms
+20 Hz +-2 ms    phase-locked   10.000     96.2    103.9    100.0          25.1 ms
+20 Hz +-2 ms    min-interval   10.000     96.2    103.9    100.0          25.1 ms
+30 Hz +-2 ms    phase-locked   10.000     96.3    103.8    100.0          16.7 ms
+30 Hz +-2 ms    min-interval   10.000     96.3    103.8    100.0          16.7 ms
+7 Hz +-2 ms     phase-locked    7.000    139.1    146.6    142.9          71.4 ms
+7 Hz +-2 ms     min-interval    7.000    139.1    146.6    142.9          71.4 ms
+PASSED (0 failures)
