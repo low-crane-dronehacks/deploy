@@ -70,3 +70,23 @@ class VelocityEstimator:
             self.v = np.zeros(3)
         self.t, self.p = t, pos
         return self.v.copy()
+
+
+def _quat_wxyz_to_mat(w, x, y, z):
+    return quat_xyzw_to_mat(x, y, z, w)
+
+
+def ned_to_enu_twist(vel_ned, yawspeed_ned):
+    """NED velocity + NED yaw rate (clockwise from above, positive) -> ENU velocity + ENU yaw rate (CCW positive)."""
+    return (float(vel_ned[1]), float(vel_ned[0]), float(-vel_ned[2])), float(-yawspeed_ned)
+
+
+def cap_norm(v, vmax):
+    n = math.sqrt(sum(c * c for c in v))
+    return tuple(c * vmax / n for c in v) if n > vmax else tuple(v)
+
+
+def body_flu_to_ned(v_flu, q_ned_frd_wxyz):
+    """Body FLU velocity (cuVSLAM twist) -> NED world velocity."""
+    R = _quat_wxyz_to_mat(*q_ned_frd_wxyz)
+    return tuple(float(c) for c in R @ np.array([v_flu[0], -v_flu[1], -v_flu[2]], float))

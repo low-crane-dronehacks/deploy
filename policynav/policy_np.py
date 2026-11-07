@@ -73,3 +73,22 @@ class NumpyPolicy:
             if i < len(self.mlp) - 1:
                 y = _elu(y)
         return y
+
+
+def resolve_policy(path: str) -> str:
+    """Absolute path of a policy file: as given, relative to the repo root (source checkout), or from the installed
+    package share (colcon build in skybeta's team_ws)."""
+    import os
+    if os.path.isabs(path):
+        return path
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cands = [os.path.join(root, path)]
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        cands.append(os.path.join(get_package_share_directory('policynav'), path))
+    except Exception:
+        pass
+    for c in cands:
+        if os.path.exists(c):
+            return c
+    raise FileNotFoundError(f'policy {path!r} not found in {cands}')

@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>policynav</name>
+  <version>0.2.0</version>
+  <description>DroneHacks low-crane: trained navigation policy (NumPy) + stereo depth for the skybeta drone, plus
+    handheld / SITL / FlyX modes.</description>
+  <maintainer email="cbalfour@wpi.edu">Colin Balfour</maintainer>
+  <license>Apache-2.0</license>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>px4_msgs</exec_depend>
+  <exec_depend>skybeta_flight_interface</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+  <test_depend>python3-pytest</test_depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

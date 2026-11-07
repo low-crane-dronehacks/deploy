@@ -40,7 +40,7 @@ from std_msgs.msg import Empty, Float32MultiArray, String
 from . import handheld as H
 from . import obs as O
 from .node import decode_depth
-from .policy_np import NumpyPolicy
+from .policy_np import NumpyPolicy, resolve_policy
 
 PX4_QOS = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, durability=DurabilityPolicy.TRANSIENT_LOCAL,
                      history=HistoryPolicy.KEEP_LAST, depth=1)
@@ -53,7 +53,7 @@ class Handheld(Node):
         dp = lambda name, default: self.declare_parameter(name, default).value     # noqa: E731
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         pf = dp('policy_file', 'policies/cur4_clean50_800.npz')
-        self.policy = NumpyPolicy(pf if os.path.isabs(pf) else os.path.join(root, pf))
+        self.policy = NumpyPolicy(resolve_policy(pf))
         self.meta = self.policy.meta
         self.n_act = self.meta['num_actions']
         self.v_max, self.yaw_max = self.meta['v_max'], self.meta['yaw_rate_max']

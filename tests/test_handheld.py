@@ -52,3 +52,23 @@ def test_velocity_estimator_converges_and_resets_on_gap():
     assert abs(v[0] - 1.0) < 1e-3 and abs(v[1]) < 1e-9
     v = ve.update(10.0, (5.0, 0.0, 0.0))                 # 7 s gap: no velocity spike
     assert np.allclose(v, 0.0)
+
+
+def test_ned_command_to_enu_twist():
+    v, wz = H.ned_to_enu_twist((1.0, 2.0, -0.5), 0.3)       # north 1, east 2, climbing 0.5; yaw right 0.3
+    assert v == (2.0, 1.0, 0.5) and wz == -0.3
+
+
+def test_cap_norm_scales_all_axes():
+    v = H.cap_norm((1.2, 0.6, 0.6), 1.45)
+    assert abs(math.sqrt(sum(c * c for c in v)) - 1.45) < 1e-9 and abs(v[0] / v[1] - 2.0) < 1e-9
+    assert H.cap_norm((0.1, 0.0, 0.0), 1.45) == (0.1, 0.0, 0.0)
+
+
+def test_body_flu_velocity_to_ned():
+    # facing east (ROS identity pose), moving forward 1 m/s in FLU -> NED east 1
+    _, q = H.ros_pose_to_ned((0, 0, 0), (0.0, 0.0, 0.0, 1.0))
+    v = H.body_flu_to_ned((1.0, 0.0, 0.0), q)
+    assert np.allclose(v, (0.0, 1.0, 0.0), atol=1e-9)
+    v = H.body_flu_to_ned((0.0, 1.0, 0.5), q)              # left (= north when facing east) and up
+    assert np.allclose(v, (1.0, 0.0, -0.5), atol=1e-9)
