@@ -1,17 +1,35 @@
 # AGENTS.md: context for coding agents
 
 This repo is the code that flies. Training lives in dronehacks-sim; read its AGENTS.md for the rules, the
-task, and how policies are trained. Keep this repo small and boring.
+task, and how policies are trained. Keep this repo small, fast, and robust.
 
-Docs: docs/SITL.md (local PX4 rig), docs/FLYX_LOCAL.md (organizers' sim on pear-omen), docs/POLICIES.md
-(policy files + observation/action contract), docs/HARDWARE.md (kit, training-plant assumptions, open data).
+Docs:
+- `docs/AUTONOMY_ARCHITECTURE.md`: Master reference for C++ EGO-Planner-v2, MPPI, RRT*, and iSAM2.
+- `docs/SITL.md`: Local PX4 SITL + Gazebo Harmonic rig.
+- `docs/FLYX_LOCAL.md`: Organizers' sim on pear-omen.
+- `docs/POLICIES.md`: Policy files + observation/action contract.
+- `docs/HARDWARE.md`: Kit, training-plant assumptions, open data.
 Update them when you change what they describe.
+
+## Autonomy Stack Architecture (`ego_planner/`)
+
+The C++ ROS 2 autonomy stack is decoupled into clear interfaces:
+1. **Clearance & Collision**: `GridMap` (`ego_planner/include/ego_planner/grid_map.hpp`) provides $\mathcal{O}(1)$
+   continuous 3D ESDF queries, analytical spatial gradients $\nabla d(p)$, and `getObstacleCost()`.
+2. **Global Planning**: `GlobalPlannerBase` (`global_planner_interface.hpp`) with `BSplineGlobalPlanner` (production default)
+   and `RRTStarPlanner` (`rrt_star_planner.hpp`) for asymptotic global path search.
+3. **Local Control**: `LocalControllerBase` (`local_controller_interface.hpp`) with `PrimitiveTracker` (production default)
+   and `MPPIController` (`mppi_controller.hpp`) utilizing `QuadrotorDynamics` for 50-100 Hz forward rollouts.
+4. **State Estimation**: `onboard/slam/isam2_node.py` factor graph node linking IMU preintegration, visual odometry,
+   rangefinder, and `config/arena_prior.json` surveyed anchors to PX4 `vehicle_visual_odometry`.
+5. **Mission State Machine**: `MissionManager` (`mission_manager.hpp`) with hierarchical states
+   `WAIT` -> `ARM` -> `FLY` -> `LAND` -> `DONE`, gate sequence tracking, and CBF net barrier constraints.
 
 ## Rules
 - **Never arm or fly without explicit approval from the team for that specific flight** (SITL included when it
   runs on a shared lab PC). Dry runs (`arm:=false`) are always fine.
-- One stack for drone / sitl / flyx: platform differences go in `launch/policynav.launch.py` PROFILES and
-  `config/`, never as `if sim:` branches inside policynav/ or onboard/.
+- One stack for drone / sitl / flyx: platform differences go in `launch/autonomy.launch.py` (and `policynav.launch.py`)
+  PROFILES and `config/`, never as `if sim:` branches inside core planner or onboard code.
 - Pin versions in `config/versions.yaml`; a PX4/px4_msgs mismatch silently renames topics (`*_v1`).
 - The organizers' simulator is a HELD-OUT test: never tune policies or this stack's parameters to it.
 - No credentials, tokens or keys in this repo.

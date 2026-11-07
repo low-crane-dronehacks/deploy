@@ -1,0 +1,10 @@
+/**:
+  ros__parameters:
+    use_sim_time: false
+    arena_prior_json: config/arena_prior.json
+    imu_topic: /oak/imu
+    vo_topic: /visual_slam/tracking/odometry_raw
+    range_topic: /distance_sensor
+    output_odom_topic: /visual_slam/tracking/odometry
+    relinearize_threshold: 0.01
+    relinearize_skip: 1
