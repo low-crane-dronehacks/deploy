@@ -183,8 +183,13 @@ class VpiStereo : public rclcpp::Node {
     cv::stereoRectify(cv::Mat(K1s), D1, cv::Mat(K2s), D2, out, cv::Mat(R_rl), cv::Mat(T), R1, R2, P1, P2, Q,
                       cv::CALIB_ZERO_DISPARITY, 0.0);
     // remap: output pixel -> SOURCE pixel, so the source-resolution K with the output-grid P
-    cv::initUndistortRectifyMap(cv::Mat(K1), D1, R1, P1(cv::Rect(0, 0, 3, 3)), out, CV_32FC1, m1x_, m1y_);
-    cv::initUndistortRectifyMap(cv::Mat(K2), D2, R2, P2(cv::Rect(0, 0, 3, 3)), out, CV_32FC1, m2x_, m2y_);
+    cv::Mat f1x, f1y, f2x, f2y;
+    cv::initUndistortRectifyMap(cv::Mat(K1), D1, R1, P1(cv::Rect(0, 0, 3, 3)), out, CV_32FC1, f1x, f1y);
+    cv::initUndistortRectifyMap(cv::Mat(K2), D2, R2, P2(cv::Rect(0, 0, 3, 3)), out, CV_32FC1, f2x, f2y);
+    // Fixed-point maps (integer coords + 5-bit subpixel table index): cv::remap converts float maps to exactly this
+    // form tile by tile on every call, so converting once gives a bit-identical image for less work per frame.
+    cv::convertMaps(f1x, f1y, m1x_, m1y_, CV_16SC2);
+    cv::convertMaps(f2x, f2y, m2x_, m2y_, CV_16SC2);
     fx_ = P1.at<double>(0, 0);
     cx_ = P1.at<double>(0, 2);
     cy_ = P1.at<double>(1, 2);
@@ -379,7 +384,7 @@ class VpiStereo : public rclcpp::Node {
   bool rect_ready_ = false;
   double fx_ = 0, cx_ = 0, cy_ = 0, baseline_ = 0;
   std::string frame_;
-  cv::Mat m1x_, m1y_, m2x_, m2y_;
+  cv::Mat m1x_, m1y_, m2x_, m2y_;                          // CV_16SC2 + CV_16UC1 remap maps
   VPIStream stream_ = nullptr;
   VPIPayload payload_ = nullptr;
   VPIImage in8_l_ = nullptr, in8_r_ = nullptr, disp_ = nullptr, conf_ = nullptr;
