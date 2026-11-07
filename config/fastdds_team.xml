@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  policynav: Fast DDS profile for OUR processes only (opt-in: skybeta.launch.py dds_profile:=team).
+
+  This is skybeta's host/dds/fastdds_localhost.xml (v0.3.2) with ONE change: a larger shared-memory
+  segment. Everything that keeps DDS on this Jetson is copied verbatim and must stay that way:
+  SHM + UDPv4 whitelisted to 127.0.0.1, builtin transports off, initial peer 127.0.0.1,
+  maxInitialPeersRange 32. If the organizers change their file, re-copy it and re-apply the one change.
+  Their profile, env and processes are never touched: the launch sets FASTRTPS_DEFAULT_PROFILES_FILE
+  to this file in our nodes' environment only.
+
+  Why: each participant's SHM segment holds the payloads of everything it *writes* until all readers
+  have taken them. Fast DDS 2.6 fragments samples to the smallest transport limit (UDP, ~64 KB), so
+  our 640x400 32FC1 depth image (1 MB) is 16 fragments, and the default segment (512 KiB, as in
+  /dev/shm/fastrtps_* = 549408 B) cannot hold one whole frame. When the segment runs out the
+  writer recycles or fails buffers and the frame is dropped / delayed. 8 MiB holds several frames.
+  Readers are unaffected by their own segment size (they read from the writer's segment), so this
+  helps the topics WE publish, not the stack's images we subscribe to.
+
+  Cost: 8 MiB of /dev/shm (tmpfs, 3.8 GB) per participant of ours, allocated lazily.
+-->
+<dds xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <profiles>
+    <transport_descriptors>
+      <transport_descriptor>
+        <transport_id>skybeta_shm</transport_id>
+        <type>SHM</type>
+        <maxInitialPeersRange>32</maxInitialPeersRange>
+        <segment_size>8388608</segment_size>
+      </transport_descriptor>
+      <transport_descriptor>
+        <transport_id>skybeta_udp_loopback</transport_id>
+        <type>UDPv4</type>
+        <maxInitialPeersRange>32</maxInitialPeersRange>
+        <interfaceWhiteList>
+          <address>127.0.0.1</address>
+        </interfaceWhiteList>
+      </transport_descriptor>
+    </transport_descriptors>
+
+    <participant profile_name="policynav_localhost" is_default_profile="true">
+      <rtps>
+        <userTransports>
+          <transport_id>skybeta_shm</transport_id>
+          <transport_id>skybeta_udp_loopback</transport_id>
+        </userTransports>
+        <useBuiltinTransports>false</useBuiltinTransports>
+        <builtin>
+          <initialPeersList>
+            <locator>
+              <udpv4>
+                <address>127.0.0.1</address>
+              </udpv4>
+            </locator>
+          </initialPeersList>
+        </builtin>
+      </rtps>
+    </participant>
+  </profiles>
+</dds>
