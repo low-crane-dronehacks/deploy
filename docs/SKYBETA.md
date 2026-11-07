@@ -43,6 +43,12 @@ a dirty tree. Team code lives in `~/team_ws/src` (`/root/team_ws` in the contain
 ros2 launch policynav skybeta.launch.py mode:=handheld      # props OFF first
 ```
 
+## Scripted test flight (no policy)
+`onboard/examples/climb_forward_hold_skybeta.py` (launch: `skybeta_climb_forward.launch.py`): climb `height`, fly `forward_m`
+along the heading at Offboard start, hold a pose `hold_s`, then hover until the pilot lands. Same plan as
+`climb_forward_hold.py` (which commands PX4 directly: SITL / FlyX only), through the skybeta contract. Dry run by
+default (`fly:=false`: prints the plan from live odometry, publishes nothing).
+
 ## Known gaps (2026-11-07)
 - **`vpi_stereo` has never been compiled.** There is no VPI or ROS on our dev machines. Expect small fixes at
   the first `team_build.sh`. Until it builds, use `stereo_backend:=sgbm`. VPI has no Python bindings in
