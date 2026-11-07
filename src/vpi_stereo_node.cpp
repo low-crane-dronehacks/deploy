@@ -212,8 +212,11 @@ class VpiStereo : public rclcpp::Node {
     auto l = left_, r = right_;
     left_.reset();
     right_.reset();
-    const double now_s = now().seconds();
-    if (now_s - t_last_ < 1.0 / rate_hz_) return;           // match at most rate_hz (15 Hz, as trained)
+    // Match at most rate_hz (15 Hz, as trained), decimating on camera stamps. The 0.8 tolerance matters: with 30 Hz
+    // input, a strict 1/rate_hz gap rejects every other pair about half the time (stamp jitter puts it a hair under
+    // 66.7 ms), which halves the rate to ~10 Hz.
+    const double now_s = tl;
+    if (now_s - t_last_ < 0.8 / rate_hz_) return;
     if (!info_l_ || !info_r_) {
       RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000, "waiting for /oak/{left,right}/camera_info");
       return;
