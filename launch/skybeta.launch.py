@@ -7,11 +7,13 @@ Set in /etc/skybeta/drone.env:  COMPETITOR_PKG=policynav  COMPETITOR_LAUNCH=skyb
     ros2 launch policynav skybeta.launch.py mode:=handheld           # props OFF: camera + policy, no setpoints
     ros2 launch policynav skybeta.launch.py policy:=policies/<name>.npz
     ros2 launch policynav skybeta.launch.py dds_profile:=stack            # our nodes on skybeta's DDS profile as-is
+    ros2 launch policynav skybeta.launch.py nice:=0 cpus:=3-5             # CPU placement of OUR nodes (see below)
 
 flight_interface is kept exactly as skybeta's competitor_example starts it (it owns the Offboard heartbeat and
 the safety envelope). mode:=handheld does not start it and publishes no setpoints at all.
 """
 import os
+import re
 import xml.etree.ElementTree as ET
 
 from ament_index_python.packages import get_package_share_directory
@@ -41,6 +43,8 @@ ARGUMENTS = [
     ('max_flight_s', '120.0', 'then /skybeta/hold'),
     ('dds_profile', 'team', 'team (config/fastdds_team.xml: skybeta\'s localhost profile + 8 MiB SHM segment, our '
                             'nodes only) | stack (inherit skybeta\'s profile unchanged)'),
+    ('nice', '5', 'niceness of OUR nodes (0 = off): cuVSLAM, the camera driver and flight_interface win contended cores'),
+    ('cpus', '', 'taskset CPU list for OUR nodes, e.g. 3-5 ("" = all 6). The stack is not pinned to any core'),
 ]
 
 
@@ -73,6 +77,23 @@ def dds_env(context):
     return {v: path for v in PROFILE_VARS}, f'DDS: our nodes use {path} (skybeta localhost + 8 MiB SHM segment)'
 
 
+def cpu_prefix(context):
+    """`taskset -c <cpus> nice -n <n>` for OUR nodes only; never flight_interface (skybeta's heartbeat + envelope).
+
+    skybeta pins nothing: every stack thread (cuVSLAM, the depthai XLink readers, MicroXRCEAgent, flight_interface)
+    may run on cores 0-5 and the load spreads evenly (sampled 2026-11-07). So there is no "VIO core" to keep
+    clear; niceness is the lever that protects the VIO under contention without capping our own nodes.
+    """
+    n = LaunchConfiguration('nice').perform(context).strip()
+    cpus = LaunchConfiguration('cpus').perform(context).strip()
+    if not re.fullmatch(r'-?\d+', n) or not 0 <= int(n) <= 19:
+        raise ValueError(f'nice must be 0..19 (we only ever lower our own priority), got {n!r}')
+    if cpus and not re.fullmatch(r'[0-5](-[0-5])?(,[0-5](-[0-5])?)*', cpus):
+        raise ValueError(f'cpus must be a taskset list of cores 0-5 such as 3-5 or 4,5, got {cpus!r}')
+    prefix = (f'taskset -c {cpus} ' if cpus else '') + (f'nice -n {n}' if int(n) else '')
+    return prefix.strip() or None
+
+
 def generate_launch_description():
     declared = [DeclareLaunchArgument(n, default_value=d, description=h) for n, d, h in ARGUMENTS]
     return LaunchDescription(declared + [OpaqueFunction(function=nodes)])
@@ -82,6 +103,7 @@ def nodes(context):
     lc = LaunchConfiguration
     env, dds_note = dds_env(context)
     ours = dict(ONE_BLAS_THREAD, **env)
+    prefix = cpu_prefix(context)
     fly = LaunchConfigurationEquals('mode', 'fly')
     flight_interface = Node(
         package='skybeta_flight_interface', executable='flight_interface', name='flight_interface',
@@ -90,28 +112,29 @@ def nodes(context):
                                         'allow_mode_request', 'auto_offboard_on_arm', 'odometry_topic')}],
     )
     depth = Node(
-        package='policynav', executable='stereo_depth', name='policynav_depth', output='screen', emulate_tty=True, additional_env=ours,
+        package='policynav', executable='stereo_depth', name='policynav_depth', prefix=prefix, output='screen', emulate_tty=True, additional_env=ours,
         condition=LaunchConfigurationNotEquals('stereo_backend', 'vpi'),    # vpi: vpi_stereo rectifies + matches in C++
         parameters=[{'backend': PythonExpression(["'external' if '", lc('stereo_backend'), "' == 'vpi' else '",
                                                   lc('stereo_backend'), "'"]),
                      'max_disparity': lc('max_disparity'), 'rate_hz': lc('depth_rate_hz')}],
     )
     vpi = Node(
-        package='policynav', executable='vpi_stereo', name='policynav_vpi_stereo', output='screen', emulate_tty=True, additional_env=env,
+        package='policynav', executable='vpi_stereo', name='policynav_vpi_stereo', prefix=prefix, output='screen', emulate_tty=True, additional_env=env,
         condition=LaunchConfigurationEquals('stereo_backend', 'vpi'),
         parameters=[{'max_disparity': lc('max_disparity'), 'rate_hz': lc('depth_rate_hz')}],
     )
     policy = Node(
-        package='policynav', executable='skybeta_policy', name='policynav_skybeta', output='screen', additional_env=ours,
+        package='policynav', executable='skybeta_policy', name='policynav_skybeta', prefix=prefix, output='screen', additional_env=ours,
         emulate_tty=True, condition=fly,
         parameters=[{'policy_file': lc('policy'), 'speed_cap': lc('speed_cap'), 'yaw_rate_cap': lc('yaw_rate_cap'),
                      'max_flight_s': lc('max_flight_s')}],
     )
     handheld = Node(
-        package='policynav', executable='handheld', name='policynav_handheld', output='screen', emulate_tty=True, additional_env=ours,
+        package='policynav', executable='handheld', name='policynav_handheld', prefix=prefix, output='screen', emulate_tty=True, additional_env=ours,
         condition=LaunchConfigurationEquals('mode', 'handheld'),
         parameters=[{'policy_file': lc('policy'), 'state_source': 'odom', 'range_source': 'auto',
                      'depth_topic': '/policynav/depth/image', 'depth_info_topic': '/policynav/depth/camera_info',
                      'log_dir': '/root/team_ws/logs/handheld'}],
     )
-    return [LogInfo(msg=dds_note), flight_interface, depth, vpi, policy, handheld]
+    cpu_note = f'CPU: our nodes run under `{prefix}`' if prefix else 'CPU: our nodes run unpinned at nice 0'
+    return [LogInfo(msg=dds_note), LogInfo(msg=cpu_note), flight_interface, depth, vpi, policy, handheld]
