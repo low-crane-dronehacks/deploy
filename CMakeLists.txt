@@ -34,7 +34,10 @@ endif()
 find_package(ZLIB REQUIRED)
 find_package(Eigen3 REQUIRED NO_MODULE)
 add_library(policynav_core STATIC
-  src/policy/npz.cpp)
+  src/policy/npz.cpp
+  src/policy/obs.cpp)
+# obs.cpp mirrors NumPy's float64 operation order (floor() bin decisions): no fused multiply-adds there.
+set_source_files_properties(src/policy/obs.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
 set_target_properties(policynav_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_features(policynav_core PUBLIC cxx_std_17)
 target_compile_options(policynav_core PRIVATE -O3 -Wall -Wextra)
