@@ -13,6 +13,7 @@ launch/      policynav.launch.py: hardware:=drone|sitl|flyx, arm:=false|true, po
 config/      versions.yaml (pinned PX4 / px4_msgs / cuVSLAM), oak.yaml (camera), PX4 params
 sitl/        PX4 SITL rig: Docker, PX4 1.17 + Gazebo Harmonic + uXRCE, our course world
 docker/      Jetson image (todo)
+docs/        SITL.md, FLYX_LOCAL.md (organizers' sim on pear-omen), POLICIES.md, HARDWARE.md
 ```
 
 ## Run
@@ -21,9 +22,9 @@ docker/      Jetson image (todo)
 # SITL (a lab PC with Docker + NVIDIA runtime)
 sitl/run_rig.sh build && sitl/run_rig.sh up          # PX4 + Gazebo + bridges, ~90 s
 sitl/run_rig.sh policy                                # dry run: reports what the policy would command
-sitl/run_rig.sh policy -p arm:=true                   # fly (SPAWN_POSE=x,y,z,r,p,yaw_enu to move the start)
+sitl/run_rig.sh policy -p arm:=true                   # fly (SPAWN_POSE=x,y,z,r,p,yaw_enu moves the start, BATTERY_SOC=0..1)
 
-# organizers' simulator (in their workspace terminal)
+# organizers' simulator: hosted workspace, or locally on pear-omen (docs/FLYX_LOCAL.md)
 ros2 launch launch/policynav.launch.py hardware:=flyx
 
 # aircraft (UNTESTED)
@@ -36,7 +37,8 @@ are in `policynav/mission.py`. `python3 -m pytest -q tests` runs the pure tests.
 ## Status
 
 - [x] policy node, dry-run verified in the organizers' sim and in SITL (actions match training)
-- [x] SITL rig (pear-deepak), truth-based external vision
+- [x] SITL rig (pear-deepak), truth-based external vision, 4S battery sag (docs/SITL.md)
+- [x] organizers' sim installed locally on pear-omen; needs the host UDP-buffer sysctl to stay real-time (docs/FLYX_LOCAL.md)
 - [ ] SITL flight; SITL with stereo + cuVSLAM instead of truth
 - [ ] Jetson image (ARM ROS 2 Jazzy, depthai_ros_driver, cuVSLAM ARM build, uXRCE serial)
 - [ ] aircraft: Pixhawk 6C on PX4 v1.17, OAK calibration + TF, VL53L1X, EKF2 external-vision params, RC kill switch
