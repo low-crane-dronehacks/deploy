@@ -197,6 +197,7 @@ class VpiStereo : public rclcpp::Node {
     src_w_ = L.width;
     src_h_ = L.height;
     frame_ = L.header.frame_id + "_rect";
+    build_depth_lut();
 
     // static TF: the rectified frame's axes expressed in the left camera frame (rotation R1^T)
     cv::Mat R1t = R1.t();
@@ -220,6 +221,22 @@ class VpiStereo : public rclcpp::Node {
                 out_w_, baseline_ * 100.0, fx_ * baseline_ / max_disp_);
     rect_ready_ = true;
     return true;
+  }
+
+  // Depth in metres for every raw S16 (Q10.5) disparity value, indexed by its 16-bit pattern: the exact expression
+  // the per-pixel loop used to evaluate (same float/double rounding), NaN where the disparity is not positive or the
+  // depth is outside [min_depth_m, max_depth_m]. 256 KiB, built once.
+  void build_depth_lut() {
+    const double fB = fx_ * baseline_;
+    depth_lut_.assign(65536, std::numeric_limits<float>::quiet_NaN());
+    for (int i = 0; i < 65536; ++i) {
+      float d = static_cast<int16_t>(static_cast<uint16_t>(i)) / 32.0f;  // S16 Q10.5
+      if (integer_) d = std::floor(d + 0.5f);
+      if (d > 0.f) {
+        const float m = static_cast<float>(fB / d);
+        if (m >= min_m_ && m <= max_m_) depth_lut_[i] = m;
+      }
+    }
   }
 
   void setup_vpi(int w, int h) {
@@ -289,7 +306,6 @@ class VpiStereo : public rclcpp::Node {
   }
 
   void match(const Image& l, const Image& r) {
-    const double fB = fx_ * baseline_;
     const auto t0 = std::chrono::steady_clock::now();
     times_.add("1 camera->match start (age)", 1e3 * (now().seconds() - stamp_s(l.header.stamp)));
     try {
@@ -330,18 +346,16 @@ class VpiStereo : public rclcpp::Node {
       VPI_CHECK(vpiImageLockData(conf_, VPI_LOCK_READ, VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR, &cd));
       const auto& dp = dd.buffer.pitch.planes[0];
       const auto& cpl = cd.buffer.pitch.planes[0];
+      const float* lut = depth_lut_.data();
+      const int thr = conf_thr_;
       for (int y = 0; y < h_; ++y) {
-        const auto* drow = reinterpret_cast<const int16_t*>(static_cast<const uint8_t*>(dp.data) + y * dp.pitchBytes);
+        const auto* drow = reinterpret_cast<const uint16_t*>(static_cast<const uint8_t*>(dp.data) + y * dp.pitchBytes);
         const auto* crow = reinterpret_cast<const uint16_t*>(static_cast<const uint8_t*>(cpl.data) + y * cpl.pitchBytes);
+        float* zrow = z + static_cast<size_t>(y) * w_;
         for (int x = 0; x < w_; ++x) {
-          float d = drow[x] / 32.0f;                              // S16 Q10.5
-          if (integer_) d = std::floor(d + 0.5f);
-          float v = nan;
-          if (d > 0.f && crow[x] >= conf_thr_) {
-            const float m = static_cast<float>(fB / d);
-            if (m >= min_m_ && m <= max_m_) { v = m; ++valid; }
-          }
-          z[y * w_ + x] = v;
+          const float v = crow[x] >= thr ? lut[drow[x]] : nan;
+          zrow[x] = v;
+          valid += (v == v);                                // not NaN
         }
       }
       vpiImageUnlock(disp_);
@@ -384,6 +398,7 @@ class VpiStereo : public rclcpp::Node {
   bool rect_ready_ = false;
   double fx_ = 0, cx_ = 0, cy_ = 0, baseline_ = 0;
   std::string frame_;
+  std::vector<float> depth_lut_;                           // raw S16 disparity bits -> metres (NaN = invalid)
   cv::Mat m1x_, m1y_, m2x_, m2y_;                          // CV_16SC2 + CV_16UC1 remap maps
   VPIStream stream_ = nullptr;
   VPIPayload payload_ = nullptr;
