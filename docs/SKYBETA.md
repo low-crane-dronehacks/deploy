@@ -31,7 +31,8 @@ a dirty tree. Team code lives in `~/team_ws/src` (`/root/team_ws` in the contain
 | node | does |
 |---|---|
 | `flight_interface` | skybeta's own, started exactly as their `competitor_example` does |
-| `stereo_depth` (`policynav/depth_node.py`) | depth from the raw pair. Rectified from TF extrinsics, because the driver's camera_info is per-eye raw (R = I, D = 0, no common P). Output is 640x400; fx ~420 at alpha 0, the same as our sim and FlyX, with a 74.7 x 51 deg FOV. Matcher: VPI (census + SGM, CUDA) if `import vpi` works, else OpenCV SGBM (CPU). Invalid -> NaN -> read as near |
+| `stereo_depth` (`policynav/depth_node.py`) | rectifies the raw pair from the TF extrinsics, because the driver's camera_info is per-eye raw (R = I, D = 0, no common P). Output is 640x400; fx ~420 at alpha 0, the same as our sim and FlyX, with a 74.7 x 51 deg FOV. With `stereo_backend:=sgbm` it also matches (OpenCV SGBM 3-way: 29 ms median on 6 Orin cores with the stack up, measured). Invalid -> NaN -> read as near |
+| `vpi_stereo` (`src/vpi_stereo_node.cpp`, `stereo_backend:=vpi`, the default) | VPI C API, CUDA census + SGM with a confidence threshold on the rectified pair -> `/policynav/depth/image`. Built only if CMake finds VPI (libnvvpi3 + vpi3-dev are in skybeta:0.3.2) |
 | `skybeta_policy` (`policynav/skybeta_node.py`) | zero twists at 10 Hz until `offboard_active`, then the policy at 10 Hz. Caps: `|v|` <= 1.45, yaw <= 0.6 rad/s. Holds on stale odometry/depth, at the time limit, or after touchdown |
 | `handheld` (with `mode:=handheld`) | camera + policy with odometry state. Publishes no setpoints and does not start the flight interface |
 
@@ -43,15 +44,15 @@ ros2 launch policynav skybeta.launch.py mode:=handheld      # props OFF first
 ```
 
 ## Known gaps (2026-11-07)
-- **VPI has no Python bindings** in `skybeta:0.3.2` (C++ only: libnvvpi3 3.2.4), and OpenCV 4.5.4 there is CPU
-  only. Until a C++ VPI node or a team image with `python3-vpi3` exists, the depth node runs SGBM on the CPU.
-  Time it on the Jetson (`/policynav/depth/stats`).
+- **`vpi_stereo` has never been compiled.** There is no VPI or ROS on our dev machines. Expect small fixes at
+  the first `team_build.sh`. Until it builds, use `stereo_backend:=sgbm`. VPI has no Python bindings in
+  skybeta:0.3.2, hence C++.
 - **Lens distortion:** the driver publishes D = 0. If the real lenses have noticeable distortion,
   rectification is off. Check the rows of a rectified pair from the recorded bag
   (`~/team_ws/scratch/bags/oak_sample` on the drone).
 - **Policies:** only checkpoints trained with `--v-max 1.2 0.6 0.6 --yaw-rate-max 0.6` (`cur4_c50_slow*`, in
   training) match this envelope. Faster ones are scaled down and fly out of distribution. Train for the 80-100 px
   left band too (`left_band_*`).
-- **Repo layout:** `package.xml` sits at the repo root. colcon does not look for packages inside a package
+- **Repo layout:** `package.xml` + `CMakeLists.txt` (ament_cmake + ament_cmake_python) sit at the repo root. colcon does not look for packages inside a package
   directory, so other ROS packages added to this repo need their own repo, or this one moves to a subfolder.
 - Nothing here has run on the Jetson yet. The pure parts are tested (`tests/`).

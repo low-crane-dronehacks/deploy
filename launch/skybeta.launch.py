@@ -13,7 +13,7 @@ the safety envelope). mode:=handheld does not start it and publishes no setpoint
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import LaunchConfigurationEquals
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
 ARGUMENTS = [
@@ -28,7 +28,7 @@ ARGUMENTS = [
     # ours
     ('mode', 'fly', 'fly | handheld (props off: no flight interface, no setpoints)'),
     ('policy', 'policies/cur4_clean50_800.npz', 'exported policy (.npz), relative to the package share'),
-    ('stereo_backend', 'auto', 'vpi | sgbm | auto (VPI if its Python bindings exist, else OpenCV SGBM)'),
+    ('stereo_backend', 'vpi', 'vpi (C++ vpi_stereo, CUDA census+SGM) | sgbm (OpenCV, CPU, ~29 ms at 640x400 on 6 cores)'),
     ('max_disparity', '96', 'stereo search range at 640 px: min range = f*B/max (~0.33 m at 96, 0.40 m at 80)'),
     ('depth_rate_hz', '15.0', 'stereo rate (training: 15 Hz frames)'),
     ('speed_cap', '1.45', 'our own cap on |v| (m/s), under the interface clamp'),
@@ -49,8 +49,14 @@ def generate_launch_description():
     )
     depth = Node(
         package='policynav', executable='stereo_depth', name='policynav_depth', output='screen', emulate_tty=True,
-        parameters=[{'backend': lc('stereo_backend'), 'max_disparity': lc('max_disparity'),
-                     'rate_hz': lc('depth_rate_hz')}],
+        parameters=[{'backend': PythonExpression(["'external' if '", lc('stereo_backend'), "' == 'vpi' else '",
+                                                  lc('stereo_backend'), "'"]),
+                     'max_disparity': lc('max_disparity'), 'rate_hz': lc('depth_rate_hz')}],
+    )
+    vpi = Node(
+        package='policynav', executable='vpi_stereo', name='policynav_vpi_stereo', output='screen', emulate_tty=True,
+        condition=LaunchConfigurationEquals('stereo_backend', 'vpi'),
+        parameters=[{'max_disparity': lc('max_disparity')}],
     )
     policy = Node(
         package='policynav', executable='skybeta_policy', name='policynav_skybeta', output='screen',
@@ -65,4 +71,4 @@ def generate_launch_description():
                      'depth_topic': '/policynav/depth/image', 'depth_info_topic': '/policynav/depth/camera_info',
                      'log_dir': '/root/team_ws/logs/handheld'}],
     )
-    return LaunchDescription(declared + [flight_interface, depth, policy, handheld])
+    return LaunchDescription(declared + [flight_interface, depth, vpi, policy, handheld])

@@ -56,7 +56,11 @@ class DepthNode(Node):
         self.rate_hz = float(dp('rate_hz', 15.0))
         self.slop = float(dp('sync_slop_s', 0.005))
         ns_l, ns_r = dp('left_ns', '/oak/left'), dp('right_ns', '/oak/right')
-        self.matcher, self.backend = S.make_matcher(self.p, dp('backend', 'auto'))
+        backend = dp('backend', 'auto')
+        if backend == 'external':                 # rectify only; src/vpi_stereo_node.cpp matches (VPI C API)
+            self.matcher, self.backend = None, 'external'
+        else:
+            self.matcher, self.backend = S.make_matcher(self.p, backend)
         from tf2_ros import Buffer, TransformListener
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -72,6 +76,9 @@ class DepthNode(Node):
             self.create_subscription(Image, f'{ns}/image_raw', lambda m, s=side: self._on_img(s, m),
                                      qos_profile_sensor_data)
         self.pub = self.create_publisher(Image, '/policynav/depth/image', qos_profile_sensor_data)
+        self.pub_rect = {s: self.create_publisher(Image, f'/policynav/stereo/{s}/image_rect', qos_profile_sensor_data)
+                         for s in ('left', 'right')}
+        self.pub_rect_info = self.create_publisher(CameraInfo, '/policynav/stereo/camera_info', qos_profile_sensor_data)
         self.pub_info = self.create_publisher(CameraInfo, '/policynav/depth/camera_info', qos_profile_sensor_data)
         self.pub_stats = self.create_publisher(String, '/policynav/depth/stats', 10)
         self.create_timer(2.0, self._stats)
@@ -154,6 +161,24 @@ class DepthNode(Node):
         (mxl, myl), (mxr, myr) = self.maps
         L = cv2.remap(_img_to_np(l), mxl, myl, cv2.INTER_LINEAR)
         R = cv2.remap(_img_to_np(r), mxr, myr, cv2.INTER_LINEAR)
+        if self.matcher is None:                  # external matcher: publish the rectified pair + its geometry
+            for side, img, src in (('left', L, l), ('right', R, r)):
+                m = Image()
+                m.header.stamp, m.header.frame_id = src.header.stamp, self.frame
+                m.height, m.width, m.encoding, m.is_bigendian, m.step = img.shape[0], img.shape[1], 'mono8', 0, img.shape[1]
+                m.data = img.tobytes()
+                self.pub_rect[side].publish(m)
+            ci = CameraInfo()
+            ci.header.stamp, ci.header.frame_id = l.header.stamp, self.frame
+            ci.width, ci.height = L.shape[1], L.shape[0]
+            ci.k = [self.fx, 0.0, self.cx, 0.0, self.fy, self.cy, 0.0, 0.0, 1.0]
+            ci.p = [self.fx, 0.0, self.cx, -self.fx * abs(self.baseline), 0.0, self.fy, self.cy, 0.0, 0.0, 0.0, 1.0, 0.0]
+            ci.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+            ci.distortion_model, ci.d = 'plumb_bob', [0.0] * 5
+            self.pub_rect_info.publish(ci)
+            self.ms.append(1e3 * (time.perf_counter() - t0))
+            self.n['pairs'] += 1
+            return
         disp, valid = self.matcher(L, R)
         z = S.disparity_to_depth(disp, self.fx, abs(self.baseline), valid=valid, min_m=self.p.min_depth_m,
                                  max_m=self.p.max_depth_m, integer=self.p.integer_disparity)
