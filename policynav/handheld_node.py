@@ -41,7 +41,7 @@ from . import handheld as H
 from . import obs as O
 from .node import decode_depth
 from .policy_np import NumpyPolicy, resolve_policy
-from .transport import LATEST
+from .transport import LATEST, tf_listener
 
 PX4_QOS = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, durability=DurabilityPolicy.TRANSIENT_LOCAL,
                      history=HistoryPolicy.KEEP_LAST, depth=1)
@@ -70,9 +70,10 @@ class Handheld(Node):
         os.makedirs(log_dir, exist_ok=True)
         self.log_path = os.path.join(log_dir, time.strftime('handheld_%Y%m%d_%H%M%S.npz'))
 
-        from tf2_ros import Buffer, TransformListener
+        from tf2_ros import Buffer
         self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self)
+        # transport: /tf_static only (the depth frame chain is static); tf_static_only:=false restores /tf too
+        self.tf_listener = tf_listener(self.tf_buffer, self, bool(dp('tf_static_only', True)))
         self.create_subscription(CameraInfo, info_topic, self._on_info, qos_profile_sensor_data)
         self.create_subscription(Image, self.depth_topic, self._on_depth, LATEST)
         self.create_subscription(Empty, '/policynav/handheld/reset', lambda _m: self._reset('reset topic'), 10)

@@ -38,7 +38,7 @@ from . import handheld as H
 from . import obs as O
 from .node import decode_depth
 from .policy_np import NumpyPolicy, resolve_policy
-from .transport import LATEST
+from .transport import LATEST, tf_listener
 
 PX4_QOS = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, durability=DurabilityPolicy.TRANSIENT_LOCAL,
                      history=HistoryPolicy.KEEP_LAST, depth=1)
@@ -68,9 +68,10 @@ class Skybeta(Node):
             self.get_logger().warning(f'policy v_max {mismatch} exceeds the 1.5 m/s envelope: commands will be scaled '
                                       'down (the policy was trained faster than it can fly here)')
 
-        from tf2_ros import Buffer, TransformListener
+        from tf2_ros import Buffer
         self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self)
+        # transport: /tf_static only (the depth frame chain is static); tf_static_only:=false restores /tf too
+        self.tf_listener = tf_listener(self.tf_buffer, self, bool(dp('tf_static_only', True)))
         from nav_msgs.msg import Odometry
         self.create_subscription(Odometry, dp('odom_topic', '/visual_slam/tracking/odometry'), self._on_odom, LATEST)
         self.create_subscription(String, dp('state_topic', '/skybeta/state'), self._on_state, 10)
