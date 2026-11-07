@@ -54,6 +54,7 @@ using sensor_msgs::msg::Image;
 
 namespace {
 double stamp_s(const builtin_interfaces::msg::Time& t) { return t.sec + 1e-9 * t.nanosec; }
+int64_t stamp_ns(const builtin_interfaces::msg::Time& t) { return t.sec * 1000000000LL + t.nanosec; }
 
 double ms_since(std::chrono::steady_clock::time_point t0) {
   return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
@@ -112,12 +113,12 @@ class VpiStereo : public rclcpp::Node {
     sub_l_ = create_subscription<Image>(ns_l + "/" + img, qos, [this](Image::ConstSharedPtr m) {
       times_.add("0 camera->rx left (age)", 1e3 * (now().seconds() - stamp_s(m->header.stamp)));
       left_ = m;
-      try_pair();
+      on_image(0);
     });
     sub_r_ = create_subscription<Image>(ns_r + "/" + img, qos, [this](Image::ConstSharedPtr m) {
       times_.add("0 camera->rx right (age)", 1e3 * (now().seconds() - stamp_s(m->header.stamp)));
       right_ = m;
-      try_pair();
+      on_image(1);
     });
     const double report_s = declare_parameter<double>("timing_report_s", 5.0);
     if (report_s > 0)
@@ -253,6 +254,7 @@ class VpiStereo : public rclcpp::Node {
     // CUDA SGM takes U8 directly (VPI 3.2 StereoDisparity.h); census is rank-based, so matching U8 gives the same
     // disparity + confidence bit for bit as the old U8 -> Y16_ER conversion pass, minus that pass.
     VPI_CHECK(vpiCreateStereoDisparityEstimator(VPI_BACKEND_CUDA, w, h, VPI_IMAGE_FORMAT_U8, &cp, &payload_));
+    rect_stamp_[0] = rect_stamp_[1] = -1;
     RCLCPP_INFO(get_logger(), "VPI images %dx%d ready", w, h);
   }
 
@@ -265,6 +267,38 @@ class VpiStereo : public rclcpp::Node {
     cv::Mat out(h_, w_, CV_8UC1, pl.data, pl.pitchBytes);
     cv::remap(src, out, mx, my, cv::INTER_LINEAR);
     VPI_CHECK(vpiImageUnlock(dst));
+  }
+
+  bool raw_ok(const Image& m) const {
+    return m.encoding == "mono8" && m.width == src_w_ && m.height == src_h_;
+  }
+
+  // Rectify eye (0 left, 1 right) into its VPI input unless that image is already there; remembers which stamp
+  // each VPI input holds. The GPU is idle here: match() syncs the stream before returning (single-threaded node).
+  void rectify_eye(int eye, const Image& m) {
+    const int64_t st = stamp_ns(m.header.stamp);
+    if (rect_stamp_[eye] == st) return;
+    rect_stamp_[eye] = -1;                                  // invalid while being overwritten (or if it throws)
+    if (eye == 0) rectify_into(m, m1x_, m1y_, in8_l_);
+    else rectify_into(m, m2x_, m2y_, in8_r_);
+    rect_stamp_[eye] = st;
+  }
+
+  // An image arrived. The OAK sends the eyes one after the other over USB (right ~15-19 ms after left), so when this
+  // one has no partner yet, rectify it now, off the critical path: the pair then only waits for the partner's remap.
+  void on_image(int eye) {
+    try_pair();
+    const Image::ConstSharedPtr m = eye == 0 ? left_ : right_;  // still held = waiting for its partner
+    if (!m || !rect_ready_ || w_ != out_w_ || h_ != out_h_ || !raw_ok(*m)) return;
+    if (stamp_s(m->header.stamp) - t_last_ < 0.8 / rate_hz_) return;  // its pair would be decimated anyway
+    const auto ts = std::chrono::steady_clock::now();
+    try {
+      rectify_eye(eye, *m);
+    } catch (const std::exception& e) {
+      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 5000, "VPI: %s", e.what());
+      return;
+    }
+    times_.add("2a rectify ahead of partner (CPU)", ms_since(ts));
   }
 
   void try_pair() {
@@ -289,8 +323,7 @@ class VpiStereo : public rclcpp::Node {
       return;
     }
     if (!rect_ready_ && !setup_rectification()) return;
-    if (l->encoding != "mono8" || r->encoding != "mono8" || l->width != src_w_ || l->height != src_h_ ||
-        r->width != src_w_ || r->height != src_h_) {
+    if (!raw_ok(*l) || !raw_ok(*r)) {
       RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 5000, "expected %ux%u mono8 raw images from both eyes", src_w_,
                             src_h_);
       return;
@@ -310,9 +343,9 @@ class VpiStereo : public rclcpp::Node {
     times_.add("1 camera->match start (age)", 1e3 * (now().seconds() - stamp_s(l.header.stamp)));
     try {
       auto ts = std::chrono::steady_clock::now();
-      rectify_into(l, m1x_, m1y_, in8_l_);
-      rectify_into(r, m2x_, m2y_, in8_r_);
-      times_.add("2 rectify x2 (CPU)", ms_since(ts));
+      rectify_eye(0, l);                                    // usually done already, in on_image()
+      rectify_eye(1, r);
+      times_.add("2 rectify at pair (CPU)", ms_since(ts));
       ts = std::chrono::steady_clock::now();
       VPIStereoDisparityEstimatorParams sp;
       VPI_CHECK(vpiInitStereoDisparityEstimatorParams(&sp));
@@ -399,6 +432,7 @@ class VpiStereo : public rclcpp::Node {
   double fx_ = 0, cx_ = 0, cy_ = 0, baseline_ = 0;
   std::string frame_;
   std::vector<float> depth_lut_;                           // raw S16 disparity bits -> metres (NaN = invalid)
+  int64_t rect_stamp_[2] = {-1, -1};                       // stamp (ns) of the image in in8_l_ / in8_r_, -1 = none
   cv::Mat m1x_, m1y_, m2x_, m2y_;                          // CV_16SC2 + CV_16UC1 remap maps
   VPIStream stream_ = nullptr;
   VPIPayload payload_ = nullptr;
