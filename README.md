@@ -13,7 +13,7 @@ launch/      policynav.launch.py: hardware:=drone|sitl|flyx, arm:=false|true, po
 config/      versions.yaml (pinned PX4 / px4_msgs / cuVSLAM), oak.yaml (camera), PX4 params
 sitl/        PX4 SITL rig: Docker, PX4 1.17 + Gazebo Harmonic + uXRCE, our course world
 docker/      Jetson image (todo)
-docs/        SITL.md, FLYX_LOCAL.md (organizers' sim on pear-omen), POLICIES.md, HARDWARE.md
+docs/        HANDHELD.md, SITL.md, FLYX_LOCAL.md (organizers' sim on pear-omen), POLICIES.md, HARDWARE.md
 ```
 
 ## Run
@@ -27,6 +27,9 @@ sitl/run_rig.sh policy -p arm:=true                   # fly (SPAWN_POSE=x,y,z,r,
 # organizers' simulator: hosted workspace, or locally on pear-omen (docs/FLYX_LOCAL.md)
 ros2 launch launch/policynav.launch.py hardware:=flyx
 
+# handheld dry run / data collection: camera + policy, carried, never commands PX4 (docs/HANDHELD.md)
+ros2 launch launch/policynav.launch.py hardware:=handheld record:=true
+
 # aircraft (UNTESTED)
 ros2 launch launch/policynav.launch.py hardware:=drone
 ```
@@ -39,6 +42,7 @@ are in `policynav/mission.py`. `python3 -m pytest -q tests` runs the pure tests.
 - [x] policy node, dry-run verified in the organizers' sim and in SITL (actions match training)
 - [x] SITL rig (pear-deepak), truth-based external vision, 4S battery sag (docs/SITL.md)
 - [x] organizers' sim installed locally on pear-omen; needs the host UDP-buffer sysctl to stay real-time (docs/FLYX_LOCAL.md)
+- [ ] handheld mode (`hardware:=handheld`): written + pure tests; first run on the Jetson/laptop with the OAK
 - [ ] SITL flight; SITL with stereo + cuVSLAM instead of truth
 - [ ] Jetson image (ARM ROS 2 Jazzy, depthai_ros_driver, cuVSLAM ARM build, uXRCE serial)
 - [ ] aircraft: Pixhawk 6C on PX4 v1.17, OAK calibration + TF, VL53L1X, EKF2 external-vision params, RC kill switch
