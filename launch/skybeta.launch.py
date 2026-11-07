@@ -37,6 +37,11 @@ ARGUMENTS = [
 ]
 
 
+# NumPy's OpenBLAS starts one thread per core and they busy-wait between calls. The policy's matmuls are tiny
+# (~2 ms), so 6 threads spun ~350% CPU at 10 Hz and starved cuVSLAM; one thread costs ~10% of a core.
+ONE_BLAS_THREAD = {'OMP_NUM_THREADS': '1', 'OPENBLAS_NUM_THREADS': '1'}
+
+
 def generate_launch_description():
     lc = LaunchConfiguration
     declared = [DeclareLaunchArgument(n, default_value=d, description=h) for n, d, h in ARGUMENTS]
@@ -48,7 +53,7 @@ def generate_launch_description():
                                         'allow_mode_request', 'auto_offboard_on_arm', 'odometry_topic')}],
     )
     depth = Node(
-        package='policynav', executable='stereo_depth', name='policynav_depth', output='screen', emulate_tty=True,
+        package='policynav', executable='stereo_depth', name='policynav_depth', output='screen', emulate_tty=True, additional_env=ONE_BLAS_THREAD,
         condition=LaunchConfigurationNotEquals('stereo_backend', 'vpi'),    # vpi: vpi_stereo rectifies + matches in C++
         parameters=[{'backend': PythonExpression(["'external' if '", lc('stereo_backend'), "' == 'vpi' else '",
                                                   lc('stereo_backend'), "'"]),
@@ -60,13 +65,13 @@ def generate_launch_description():
         parameters=[{'max_disparity': lc('max_disparity'), 'rate_hz': lc('depth_rate_hz')}],
     )
     policy = Node(
-        package='policynav', executable='skybeta_policy', name='policynav_skybeta', output='screen',
+        package='policynav', executable='skybeta_policy', name='policynav_skybeta', output='screen', additional_env=ONE_BLAS_THREAD,
         emulate_tty=True, condition=fly,
         parameters=[{'policy_file': lc('policy'), 'speed_cap': lc('speed_cap'), 'yaw_rate_cap': lc('yaw_rate_cap'),
                      'max_flight_s': lc('max_flight_s')}],
     )
     handheld = Node(
-        package='policynav', executable='handheld', name='policynav_handheld', output='screen', emulate_tty=True,
+        package='policynav', executable='handheld', name='policynav_handheld', output='screen', emulate_tty=True, additional_env=ONE_BLAS_THREAD,
         condition=LaunchConfigurationEquals('mode', 'handheld'),
         parameters=[{'policy_file': lc('policy'), 'state_source': 'odom', 'range_source': 'auto',
                      'depth_topic': '/policynav/depth/image', 'depth_info_topic': '/policynav/depth/camera_info',
