@@ -21,6 +21,7 @@
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cmath>
@@ -439,16 +440,25 @@ class VpiStereo : public rclcpp::Node {
       const auto& cpl = cd.buffer.pitch.planes[0];
       const float* lut = depth_lut_.data();
       const int thr = conf_thr_;
-      for (int y = 0; y < h_; ++y) {
-        const auto* drow = reinterpret_cast<const uint16_t*>(static_cast<const uint8_t*>(dp.data) + y * dp.pitchBytes);
-        const auto* crow = reinterpret_cast<const uint16_t*>(static_cast<const uint8_t*>(cpl.data) + y * cpl.pitchBytes);
-        float* zrow = z + static_cast<size_t>(y) * w_;
-        for (int x = 0; x < w_; ++x) {
-          const float v = crow[x] >= thr ? lut[drow[x]] : nan;
-          zrow[x] = v;
-          valid += (v == v);                                // not NaN
+      const int w = w_;
+      std::atomic<size_t> n_valid{0};
+      // rows in a few stripes on OpenCV's thread pool (the same one cv::remap uses): it is on the critical path
+      cv::parallel_for_(cv::Range(0, h_), [&](const cv::Range& rows) {
+        size_t n = 0;
+        for (int y = rows.start; y < rows.end; ++y) {
+          const auto* drow = reinterpret_cast<const uint16_t*>(static_cast<const uint8_t*>(dp.data) + y * dp.pitchBytes);
+          const auto* crow =
+              reinterpret_cast<const uint16_t*>(static_cast<const uint8_t*>(cpl.data) + y * cpl.pitchBytes);
+          float* zrow = z + static_cast<size_t>(y) * w;
+          for (int x = 0; x < w; ++x) {
+            const float v = crow[x] >= thr ? lut[drow[x]] : nan;
+            zrow[x] = v;
+            n += (v == v);                                  // not NaN
+          }
         }
-      }
+        n_valid += n;
+      }, 4);
+      valid = n_valid;
       vpiImageUnlock(disp_);
       vpiImageUnlock(conf_);
     } catch (const std::exception& e) {
