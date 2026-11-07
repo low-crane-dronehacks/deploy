@@ -5,10 +5,13 @@
 #include <memory>
 #include <string>
 
+#include <geometry_msgs/msg/twist_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
+#ifdef HAVE_PX4_MSGS
 #include <px4_msgs/msg/offboard_control_mode.hpp>
 #include <px4_msgs/msg/trajectory_setpoint.hpp>
 #include <px4_msgs/msg/vehicle_rates_setpoint.hpp>
+#endif
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/string.hpp>
 
@@ -28,6 +31,7 @@ class ControlMuxNode : public rclcpp::Node {
       mux_.setRequestedPathway(ControlPathway::kClassicalMPPI);
     }
 
+#ifdef HAVE_PX4_MSGS
     rclcpp::QoS px4_qos(1);
     px4_qos.best_effort();
     px4_qos.transient_local();
@@ -38,7 +42,6 @@ class ControlMuxNode : public rclcpp::Node {
         "/fmu/in/trajectory_setpoint", px4_qos);
     pub_fmu_rates_ = create_publisher<px4_msgs::msg::VehicleRatesSetpoint>(
         "/fmu/in/vehicle_rates_setpoint", px4_qos);
-    pub_status_ = create_publisher<std_msgs::msg::String>("/control/mux_status", 10);
 
     sub_traj_ = create_subscription<px4_msgs::msg::TrajectorySetpoint>(
         "/control/trajectory_setpoint", px4_qos,
@@ -46,6 +49,11 @@ class ControlMuxNode : public rclcpp::Node {
     sub_rates_ = create_subscription<px4_msgs::msg::VehicleRatesSetpoint>(
         "/control/rates_setpoint", px4_qos,
         [this](const px4_msgs::msg::VehicleRatesSetpoint::SharedPtr m) { onRatesSetpoint(*m); });
+#endif
+    pub_status_ = create_publisher<std_msgs::msg::String>("/control/mux_status", 10);
+    sub_cmd_vel_ = create_subscription<geometry_msgs::msg::TwistStamped>(
+        "/control/cmd_vel", 10,
+        [this](const geometry_msgs::msg::TwistStamped::SharedPtr m) { onCmdVel(*m); });
     sub_odom_ = create_subscription<nav_msgs::msg::Odometry>(
         "/odometry/local", rclcpp::SensorDataQoS(),
         [this](const nav_msgs::msg::Odometry::SharedPtr m) { onOdometry(*m); });
@@ -65,6 +73,16 @@ class ControlMuxNode : public rclcpp::Node {
   }
 
  private:
+  void onCmdVel(const geometry_msgs::msg::TwistStamped& m) {
+    TrajectorySetpointCmd cmd{};
+    cmd.timestamp_s = get_clock()->now().seconds();
+    cmd.pos_ned = state_odom_.pos_odom;
+    cmd.vel_ned = Eigen::Vector3d(m.twist.linear.x, m.twist.linear.y, m.twist.linear.z);
+    cmd.yawspeed_rad_s = m.twist.angular.z;
+    mux_.onClassicalCommand(cmd);
+  }
+
+#ifdef HAVE_PX4_MSGS
   void onTrajectorySetpoint(const px4_msgs::msg::TrajectorySetpoint& m) {
     TrajectorySetpointCmd cmd{};
     cmd.timestamp_s = get_clock()->now().seconds();
@@ -84,6 +102,7 @@ class ControlMuxNode : public rclcpp::Node {
     cmd.inference_latency_ms = 2.0;
     mux_.onRLRatesCommand(cmd);
   }
+#endif
 
   void onOdometry(const nav_msgs::msg::Odometry& m) {
     state_odom_.timestamp_s = rclcpp::Time(m.header.stamp).seconds();
@@ -107,6 +126,7 @@ class ControlMuxNode : public rclcpp::Node {
 
     if (!arm_authorized_) return; // Never publish to PX4 unless arm:=true
 
+#ifdef HAVE_PX4_MSGS
     const uint64_t us = static_cast<uint64_t>(get_clock()->now().nanoseconds() / 1000);
     px4_msgs::msg::OffboardControlMode ocm{};
     ocm.timestamp = us;
@@ -155,19 +175,22 @@ class ControlMuxNode : public rclcpp::Node {
       sp.yawspeed = static_cast<float>(dec.trajectory_cmd.yawspeed_rad_s);
       pub_fmu_traj_->publish(sp);
     }
+#endif
   }
 
   ControlMux mux_;
   VehicleKinematics state_odom_{};
   bool arm_authorized_{false};
 
+#ifdef HAVE_PX4_MSGS
   rclcpp::Publisher<px4_msgs::msg::OffboardControlMode>::SharedPtr pub_ocm_;
   rclcpp::Publisher<px4_msgs::msg::TrajectorySetpoint>::SharedPtr pub_fmu_traj_;
   rclcpp::Publisher<px4_msgs::msg::VehicleRatesSetpoint>::SharedPtr pub_fmu_rates_;
-  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_status_;
-
   rclcpp::Subscription<px4_msgs::msg::TrajectorySetpoint>::SharedPtr sub_traj_;
   rclcpp::Subscription<px4_msgs::msg::VehicleRatesSetpoint>::SharedPtr sub_rates_;
+#endif
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_status_;
+  rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr sub_cmd_vel_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_odom_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_mode_;
 

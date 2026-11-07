@@ -10,10 +10,13 @@
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
+#include <geometry_msgs/msg/twist_stamped.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <nav_msgs/msg/path.hpp>
+#ifdef HAVE_PX4_MSGS
 #include <px4_msgs/msg/trajectory_setpoint.hpp>
+#endif
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
@@ -106,8 +109,12 @@ class MazePlanningNode : public rclcpp::Node {
     rclcpp::QoS px4_qos(1);
     px4_qos.best_effort();
     px4_qos.transient_local();
+#ifdef HAVE_PX4_MSGS
     pub_traj_sp_ =
         create_publisher<px4_msgs::msg::TrajectorySetpoint>("/control/trajectory_setpoint", px4_qos);
+#endif
+    pub_cmd_vel_ =
+        create_publisher<geometry_msgs::msg::TwistStamped>("/control/cmd_vel", 10);
 
     // Subscribers matching Section 2.3 Detailed Topic Specification
     sub_odom_ = create_subscription<nav_msgs::msg::Odometry>(
@@ -362,7 +369,17 @@ class MazePlanningNode : public rclcpp::Node {
       }
     }
 
-    // 4. Publish /control/trajectory_setpoint (Pos + Vel + Acc feedforward + Yaw + Yawspeed)
+    // 4. Publish /control/cmd_vel (always) and /control/trajectory_setpoint (when px4_msgs is present)
+    geometry_msgs::msg::TwistStamped tw{};
+    tw.header.stamp = get_clock()->now();
+    tw.header.frame_id = odom_frame_;
+    tw.twist.linear.x = cmd.vel_ned.x();
+    tw.twist.linear.y = cmd.vel_ned.y();
+    tw.twist.linear.z = cmd.vel_ned.z();
+    tw.twist.angular.z = cmd.yawspeed_rad_s;
+    pub_cmd_vel_->publish(tw);
+
+#ifdef HAVE_PX4_MSGS
     px4_msgs::msg::TrajectorySetpoint sp{};
     sp.timestamp = static_cast<uint64_t>(get_clock()->now().nanoseconds() / 1000);
     sp.position = {
@@ -383,6 +400,7 @@ class MazePlanningNode : public rclcpp::Node {
     sp.yaw = static_cast<float>(cmd.yaw_rad);
     sp.yawspeed = static_cast<float>(cmd.yawspeed_rad_s);
     pub_traj_sp_->publish(sp);
+#endif
   }
 
   tf2_ros::Buffer tf_buffer_;
@@ -415,7 +433,10 @@ class MazePlanningNode : public rclcpp::Node {
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_map_cloud_;
   rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr pub_rl_lookaheads_;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr pub_costmap_;
+  rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr pub_cmd_vel_;
+#ifdef HAVE_PX4_MSGS
   rclcpp::Publisher<px4_msgs::msg::TrajectorySetpoint>::SharedPtr pub_traj_sp_;
+#endif
 
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_odom_;
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_points_;
