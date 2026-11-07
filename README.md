@@ -13,7 +13,7 @@ launch/      policynav.launch.py: hardware:=drone|sitl|flyx, arm:=false|true, po
 config/      versions.yaml (pinned PX4 / px4_msgs / cuVSLAM), oak.yaml (camera), PX4 params
 sitl/        PX4 SITL rig: Docker, PX4 1.17 + Gazebo Harmonic + uXRCE, our course world
 docker/      Jetson image (todo)
-docs/        SKYBETA.md (the real drone), HANDHELD.md, SITL.md, FLYX_LOCAL.md (organizers' sim on pear-omen), POLICIES.md, HARDWARE.md
+docs/        SKYBETA.md (the real drone), DRONE_TESTING.md (every test/flight command on the drone), HANDHELD.md, SITL.md, FLYX_LOCAL.md (organizers' sim on pear-omen), POLICIES.md, HARDWARE.md
 ```
 
 ## Run

@@ -4,6 +4,7 @@ Drone 17 ("skybeta-17", Jetson Orin Nano, JetPack 6) runs the organizers' skybet
 (ROS 2 Humble). The source is in `~/skybeta` on the drone; **never edit it**, because organizer updates refuse
 a dirty tree. Team code lives in `~/team_ws/src` (`/root/team_ws` in the containers) and is built with
 `container_scripts/team_build.sh`. Their guide: `~/skybeta/docs/competitor_guide.md`.
+Command reference for building, bench tests and test flights: [DRONE_TESTING.md](DRONE_TESTING.md).
 
 ## Contract (what we may touch)
 - **Read:**
