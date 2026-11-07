@@ -21,8 +21,9 @@ The C++ ROS 2 autonomy stack is decoupled into clear interfaces:
    and `RRTStarPlanner` (`rrt_star_planner.hpp`) for asymptotic global path search.
 3. **Local Control**: `LocalControllerBase` (`local_controller_interface.hpp`) with `PrimitiveTracker` (production default)
    and `MPPIController` (`mppi_controller.hpp`) utilizing `QuadrotorDynamics` for 50-100 Hz forward rollouts.
-4. **State Estimation**: `onboard/slam/isam2_node.py` factor graph node linking IMU preintegration, visual odometry,
-   rangefinder, and `config/arena_prior.json` surveyed anchors to PX4 `vehicle_visual_odometry`.
+4. **State Estimation**: PX4 flies on cuVSLAM (`onboard/` -> `ev_bridge` -> EKF2), unchanged. The C++ iSAM2 graph in
+   `src/` (docs/ISAM2.md) corrects PX4's estimate with depth for the PLANNER only (pose + distance grid). Its output
+   must never go back into PX4: the graph uses PX4's estimate as odometry, so that would be a feedback loop.
 5. **Mission State Machine**: `MissionManager` (`mission_manager.hpp`) with hierarchical states
    `WAIT` -> `ARM` -> `FLY` -> `LAND` -> `DONE`, gate sequence tracking, and CBF net barrier constraints.
 

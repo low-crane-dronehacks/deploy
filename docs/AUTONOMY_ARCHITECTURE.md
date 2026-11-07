@@ -10,11 +10,13 @@ The codebase has been refactored to decouple state estimation, global planning, 
 
 ```mermaid
 flowchart TD
-    subgraph Estimation["State Estimation (iSAM2 / VIO)"]
-        Sensors["OAK-D Stereo + Rangefinder + PX4 IMU"] --> iSAM2["iSAM2 Factor Graph Node (onboard/slam/isam2_node.py)"]
-        PriorJSON["config/arena_prior.json (Surveyed Anchors)"] --> iSAM2
-        iSAM2 --> EVBridge["onboard/vio/ev_bridge.py"]
-        EVBridge --> PX4Odom["/fmu/in/vehicle_visual_odometry"]
+    subgraph Estimation["State Estimation (VIO -> PX4; iSAM2 for planning only)"]
+        CuVSLAM["cuVSLAM (onboard/slam)"] --> EVBridge["onboard/vio/ev_bridge.py"]
+        EVBridge --> PX4Odom["/fmu/in/vehicle_visual_odometry -> EKF2"]
+        PX4Odom --> PX4Est["PX4 vehicle_local_position + attitude"]
+        PX4Est --> iSAM2["C++ iSAM2 depth graph (src/, docs/ISAM2.md)"]
+        DepthCamE["/camera/depth/image_raw"] --> iSAM2
+        iSAM2 -.->|"pose + distance grid (not wired yet; never back to PX4)"| GlobalPlanner
     end
 
     subgraph Priors["Arena Priors & Clearance Field"]
@@ -61,7 +63,7 @@ flowchart TD
 | **Mission Manager** | [`ego_planner/include/ego_planner/mission_manager.hpp`](file:///home/ejkaba/prj/deploy/ego_planner/include/ego_planner/mission_manager.hpp), `src/mission_manager.cpp` | State machine (`WAIT` $\to$ `ARM` $\to$ `FLY` $\to$ `LAND` $\to$ `DONE`), gate sequence tracking, and CBF barriers. |
 | **ROS 2 Flight Node** | [`ego_planner/src/ego_planner_node.cpp`](file:///home/ejkaba/prj/deploy/ego_planner/src/ego_planner_node.cpp) | PX4 uORB offboard streaming, camera depth subscription, and coordinate transforms (FLU $\leftrightarrow$ NED). |
 | **Launch Infrastructure** | [`launch/ego_planner.launch.py`](file:///home/ejkaba/prj/deploy/launch/ego_planner.launch.py) (aliased to `launch/autonomy.launch.py`) | Modular launch configuration with parameters for hardware, planner, and controller. |
-| **iSAM2 Node & Config** | [`onboard/slam/isam2_node.py`](file:///home/ejkaba/prj/deploy/onboard/slam/isam2_node.py), [`onboard/config/isam2.yaml`](file:///home/ejkaba/prj/deploy/onboard/config/isam2.yaml) | GTSAM factor graph skeleton integrating IMU preintegration, visual odometry, rangefinder, and prior anchors. |
+| **iSAM2 depth graph** | [`src/`](../src/), [`docs/ISAM2.md`](ISAM2.md) | C++ keyframe graph (GTSAM iSAM2): depth ICP + PX4 estimate -> corrected pose + distance grid for the planner / MPPI (`MppiStateSink`). Planning only: never fed back into PX4. |
 
 ---
 
@@ -115,18 +117,13 @@ The RRT\* planner is located in [`ego_planner/include/ego_planner/rrt_star_plann
 
 ## 5. Developer Instructions for iSAM2
 
-The iSAM2 estimator node is located in [`onboard/slam/isam2_node.py`](file:///home/ejkaba/prj/deploy/onboard/slam/isam2_node.py) with configuration [`onboard/config/isam2.yaml`](file:///home/ejkaba/prj/deploy/onboard/config/isam2.yaml).
+The estimator is the C++ graph in [`src/`](../src/); see [`docs/ISAM2.md`](ISAM2.md) for factors, build, topics and
+test results. It is **planning-only**: PX4 keeps flying on cuVSLAM through `ev_bridge`, and the graph corrects
+PX4's estimate with depth for the planner and MPPI. Do not publish its output to `/visual_slam/tracking/odometry` or
+anything else PX4 fuses: it consumes PX4's estimate, so that would be a feedback loop.
 
-### How to wire GTSAM factor graph:
-1. **Load Prior Landmarks**: Surveyed anchors are loaded from [`config/arena_prior.json`](file:///home/ejkaba/prj/deploy/config/arena_prior.json).
-2. **Add Factors**:
-   - `PriorFactorPose3` on keyframe $x_0$ at the launch mark.
-   - `CombinedImuFactor` between keyframes $x_k$ and $x_{k+1}$ using preintegrated IMU measurements.
-   - `BetweenFactor<Pose3>` from stereo visual odometry relative pose estimates.
-   - 1D altitude factors from `/distance_sensor` on $z_k$.
-   - Gate visual landmark factors when gate posts or window frames are detected.
-3. **Publishing Odometry**:
-   Publish the smoothed estimate to `/visual_slam/tracking/odometry`. The existing [`onboard/vio/ev_bridge.py`](file:///home/ejkaba/prj/deploy/onboard/vio/ev_bridge.py) validates covariance and sends it to PX4 via `/fmu/in/vehicle_visual_odometry`.
+Next steps: register depth against `config/arena_prior.bin` (prior-map factors, robust: the as-built arena
+differs), and connect its `MppiInput` / `DistanceGrid` to `MPPIController` / `GridMap`.
 
 ---
 

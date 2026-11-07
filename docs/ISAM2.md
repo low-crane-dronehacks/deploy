@@ -4,6 +4,10 @@ C++ estimator that feeds an MPPI controller. It is a keyframe factor graph over 
 solved incrementally with iSAM2 (Kaess et al., ICRA 2011, `Kaess11icra.pdf`) through GTSAM 4.2. The MPPI
 itself is not here.
 
+**Planning only.** PX4 keeps flying on cuVSLAM through `onboard/vio/ev_bridge.py`. This graph uses PX4's
+estimate as odometry, so its output must never be fed back into PX4 (that would be a feedback loop). It goes to
+the planner and MPPI.
+
 The estimator produces two things, both in PX4's local frame (NED world, FRD body), the same frames `policynav/obs.py` uses:
 - **State:** the rollout start pose, velocity and covariance. It is the newest keyframe's estimate, carried
   forward by PX4's motion since that keyframe, and is updated at the PX4 rate.

@@ -13,7 +13,7 @@ ego_planner/   C++17 ROS 2 autonomy stack: GridMap 3D ESDF, Motion Primitives, B
 launch/        autonomy.launch.py (alias of ego_planner.launch.py) & policynav.launch.py
 config/        arena_prior.bin, arena_prior.json (surveyed 3D course anchors & 5cm voxel ESDF)
 src/           C++ iSAM2 factor graph (depth ICP + PX4) -> state + distance field for an MPPI (docs/ISAM2.md)
-onboard/       VIO & SLAM: cuVSLAM wrapper, iSAM2 factor graph node (slam/isam2_node.py), EV bridge
+onboard/       VIO: cuVSLAM wrapper, EV bridge to PX4, health
 policynav/     policy node: depth + PX4 state -> Offboard velocity setpoints (NumPy export)
 sitl/          PX4 SITL rig: Docker/Apptainer, PX4 1.17 + Gazebo Harmonic + uXRCE, course world
 docs/          AUTONOMY_ARCHITECTURE.md, SITL.md, FLYX_LOCAL.md, POLICIES.md, HARDWARE.md, ISAM2.md

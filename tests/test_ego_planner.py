@@ -82,9 +82,3 @@ def test_arena_priors_and_slam_config():
     assert "landmarks" in prior and "launch_mark_ned" in prior["landmarks"], "Must declare launch mark anchor"
     assert "pad_center_ned" in prior["landmarks"], "Must declare touchdown pad anchor"
 
-    isam2_cfg_path = ROOT / "onboard" / "config" / "isam2.yaml"
-    assert isam2_cfg_path.exists(), "isam2.yaml configuration must exist"
-    content = isam2_cfg_path.read_text()
-    assert "output_odom_topic: /visual_slam/tracking/odometry" in content
-    assert "arena_prior_json: config/arena_prior.json" in content
-
