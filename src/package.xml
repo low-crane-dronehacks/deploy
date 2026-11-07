@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>isam2_depth</name>
+  <version>0.1.0</version>
+  <description>iSAM2 keyframe factor graph over depth ICP + PX4 odometry; state and distance field for an MPPI.</description>
+  <maintainer email="noreply@example.com">dronehacks</maintainer>
+  <license>TODO</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>gtsam</depend>
+  <depend>eigen</depend>
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>tf2_ros</depend>
+  <depend>px4_msgs</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

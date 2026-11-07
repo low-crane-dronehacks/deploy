@@ -4,7 +4,8 @@ This repo is the code that flies. Training lives in dronehacks-sim; read its AGE
 task, and how policies are trained. Keep this repo small and boring.
 
 Docs: docs/SITL.md (local PX4 rig), docs/FLYX_LOCAL.md (organizers' sim on pear-omen), docs/POLICIES.md
-(policy files + observation/action contract), docs/HARDWARE.md (kit, training-plant assumptions, open data).
+(policy files + observation/action contract), docs/HARDWARE.md (kit, training-plant assumptions, open data),
+docs/ISAM2.md (src/: iSAM2 depth + PX4 factor graph -> state and distance field for an MPPI).
 Update them when you change what they describe.
 
 ## Rules

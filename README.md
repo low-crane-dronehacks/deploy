@@ -7,13 +7,14 @@ NumPy `.npz` files (no torch needed on the drone).
 
 ```
 policynav/   policy node: depth + PX4 state -> Offboard velocity setpoints; mission/safety logic (mission.py)
+src/         C++ iSAM2 factor graph (depth ICP + PX4) -> state + distance field for an MPPI (docs/ISAM2.md)
 policies/    exported policies (.npz)   python -m dronehacks.export_policy <ckpt> --out policies/<name>.npz
 onboard/     VIO: cuVSLAM wrapper, external-vision bridge to PX4, health (from the organizers' workspace)
 launch/      policynav.launch.py: hardware:=drone|sitl|flyx, arm:=false|true, policy:=...
 config/      versions.yaml (pinned PX4 / px4_msgs / cuVSLAM), oak.yaml (camera), PX4 params
 sitl/        PX4 SITL rig: Docker, PX4 1.17 + Gazebo Harmonic + uXRCE, our course world
 docker/      Jetson image (todo)
-docs/        SITL.md, FLYX_LOCAL.md (organizers' sim on pear-omen), POLICIES.md, HARDWARE.md
+docs/        SITL.md, FLYX_LOCAL.md (organizers' sim on pear-omen), POLICIES.md, HARDWARE.md, ISAM2.md
 ```
 
 ## Run

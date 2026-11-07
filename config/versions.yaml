@@ -6,3 +6,4 @@ micro_xrce_dds_agent: v3.0.1
 ros: jazzy
 cuvslam: 17.0.0                # organizers' sim (x86 cu12 wheel); the Jetson needs the matching ARM / JetPack build
 oak_d: OAK-D S2                # passive stereo (no IR projector), 640x400 mono pair, ~7.5 cm baseline
+gtsam: 4.2.0                   # ros-jazzy-gtsam; src/ uses the 4.2 factor API (boost::optional Jacobians), 4.3 changed it
