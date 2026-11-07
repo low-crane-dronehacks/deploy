@@ -1,0 +1,420 @@
+{
+  "encoding_name": "DroneHacks 2026 Course GroundTruth Map (Analytical OBB/CSG + Surface BVH + Binary Occupancy Bitset)",
+  "magic": "CGTM",
+  "version": 1,
+  "frame": "NED",
+  "binary_file": "course_groundtruth.bin",
+  "arena": {
+    "arena_half_m": 3.0,
+    "net_top_m": 3.0,
+    "wall_top_m": 1.7271999999999998,
+    "collision_radius_m": 0.2,
+    "cp_margin_m": 0.15,
+    "touchdown_alt_m": 0.05,
+    "rest_alt_m": 0.08,
+    "lift_alt_m": 0.3,
+    "land_max_speed_ms": 1.0
+  },
+  "landmarks": {
+    "launch_mark_ned": [
+      0.9144,
+      -2.5146,
+      0.0
+    ],
+    "pad_center_ned": [
+      -0.7925,
+      -2.0422,
+      0.0
+    ],
+    "pad_radius_m": 0.9906,
+    "return_radius_m": 0.6096,
+    "return_hold_s": 3.0
+  },
+  "gates": [
+    {
+      "index": 0,
+      "name": "corridor_end",
+      "checkpoint": 0,
+      "is_window": false,
+      "A_ned": [
+        2.5844,
+        -3.048
+      ],
+      "B_ned": [
+        2.5844,
+        -1.9304
+      ],
+      "tangent_ned": [
+        0.0,
+        1.0
+      ],
+      "normal_ned": [
+        1.0,
+        0.0
+      ],
+      "length_m": 1.1176,
+      "center_ned": [
+        2.5844,
+        -2.5739,
+        -0.8
+      ],
+      "alt_min_m": 0.45,
+      "alt_max_m": 1.35,
+      "alt_nominal_m": 0.8,
+      "nominal_clearance_m": 0.4155
+    },
+    {
+      "index": 1,
+      "name": "gate_a",
+      "checkpoint": 1,
+      "is_window": false,
+      "A_ned": [
+        2.1209,
+        0.3048
+      ],
+      "B_ned": [
+        3.048,
+        0.3048
+      ],
+      "tangent_ned": [
+        1.0,
+        0.0
+      ],
+      "normal_ned": [
+        0.0,
+        1.0
+      ],
+      "length_m": 0.9271,
+      "center_ned": [
+        2.5601,
+        0.3048,
+        -0.8
+      ],
+      "alt_min_m": 0.45,
+      "alt_max_m": 1.35,
+      "alt_nominal_m": 0.8,
+      "nominal_clearance_m": 0.4392
+    },
+    {
+      "index": 2,
+      "name": "tunnel_exit",
+      "checkpoint": 2,
+      "is_window": false,
+      "A_ned": [
+        -0.3048,
+        1.5748
+      ],
+      "B_ned": [
+        -0.3048,
+        3.048
+      ],
+      "tangent_ned": [
+        0.0,
+        1.0
+      ],
+      "normal_ned": [
+        -1.0,
+        0.0
+      ],
+      "length_m": 1.4732,
+      "center_ned": [
+        -0.3048,
+        2.3114,
+        -0.8
+      ],
+      "alt_min_m": 0.55,
+      "alt_max_m": 1.15,
+      "alt_nominal_m": 0.8,
+      "nominal_clearance_m": 0.6886
+    },
+    {
+      "index": 3,
+      "name": "gate_b",
+      "checkpoint": 3,
+      "is_window": false,
+      "A_ned": [
+        -0.5472,
+        0.1568
+      ],
+      "B_ned": [
+        0.4064,
+        0.1568
+      ],
+      "tangent_ned": [
+        1.0,
+        0.0
+      ],
+      "normal_ned": [
+        0.0,
+        -1.0
+      ],
+      "length_m": 0.9536,
+      "center_ned": [
+        -0.0576,
+        0.1568,
+        -0.8
+      ],
+      "alt_min_m": 0.45,
+      "alt_max_m": 1.35,
+      "alt_nominal_m": 0.8,
+      "nominal_clearance_m": 0.464
+    },
+    {
+      "index": 4,
+      "name": "window",
+      "checkpoint": 3,
+      "is_window": true,
+      "A_ned": [
+        -2.7015,
+        -0.6273
+      ],
+      "B_ned": [
+        -1.8423,
+        -0.3146
+      ],
+      "tangent_ned": [
+        0.939693,
+        0.34202
+      ],
+      "normal_ned": [
+        0.34202,
+        -0.939693
+      ],
+      "length_m": 0.9144,
+      "center_ned": [
+        -2.283,
+        -0.475,
+        -0.78
+      ],
+      "alt_min_m": 0.62,
+      "alt_max_m": 0.92,
+      "alt_nominal_m": 0.78,
+      "nominal_clearance_m": 0.4392
+    }
+  ],
+  "occupancy_bitset": {
+    "resolution_m": 0.05,
+    "lo_ned": [
+      -3.05,
+      -3.05,
+      -3.05
+    ],
+    "hi_ned": [
+      3.05,
+      3.05,
+      0.0
+    ],
+    "shape": [
+      123,
+      123,
+      62
+    ],
+    "num_uint64_words": 14657,
+    "occupied_voxels": 40802
+  },
+  "primitives": {
+    "obb_slabs": [
+      {
+        "name": "wall0_left_pillar",
+        "ax": -3.0297,
+        "ay": -0.74675,
+        "bx": -2.7015,
+        "by": -0.62735,
+        "half_thickness_m": 0.0508,
+        "z_min_ned": -1.7272,
+        "z_max_ned": 0.0
+      },
+      {
+        "name": "wall0_right_pillar",
+        "ax": -1.84225,
+        "ay": -0.31455,
+        "bx": -0.5472,
+        "by": 0.1568,
+        "half_thickness_m": 0.0508,
+        "z_min_ned": -1.7272,
+        "z_max_ned": 0.0
+      },
+      {
+        "name": "wall0_window_sill",
+        "ax": -2.7015,
+        "ay": -0.62735,
+        "bx": -1.84225,
+        "by": -0.31455,
+        "half_thickness_m": 0.0508,
+        "z_min_ned": -0.3048,
+        "z_max_ned": 0.0
+      },
+      {
+        "name": "wall0_window_lintel",
+        "ax": -2.7015,
+        "ay": -0.62735,
+        "bx": -1.84225,
+        "by": -0.31455,
+        "half_thickness_m": 0.0508,
+        "z_min_ned": -1.7272,
+        "z_max_ned": -1.2192
+      },
+      {
+        "name": "wall1",
+        "ax": 0.4572,
+        "ay": -3.048,
+        "bx": 0.4572,
+        "by": 1.5748,
+        "half_thickness_m": 0.0508,
+        "z_min_ned": -1.7272,
+        "z_max_ned": 0.0
+      },
+      {
+        "name": "wall2",
+        "ax": -1.12855,
+        "ay": 0.97335,
+        "bx": 0.3871,
+        "by": 1.52505,
+        "half_thickness_m": 0.0508,
+        "z_min_ned": -1.7272,
+        "z_max_ned": 0.0
+      },
+      {
+        "name": "wall3",
+        "ax": 0.508,
+        "ay": -1.9304,
+        "bx": 2.1209,
+        "by": -1.9304,
+        "half_thickness_m": 0.0508,
+        "z_min_ned": -1.7272,
+        "z_max_ned": 0.0
+      },
+      {
+        "name": "wall4",
+        "ax": -0.6223,
+        "ay": -0.9754,
+        "bx": 0.4064,
+        "by": -0.9754,
+        "half_thickness_m": 0.0508,
+        "z_min_ned": -1.7272,
+        "z_max_ned": 0.0
+      },
+      {
+        "name": "wall5",
+        "ax": 1.4351,
+        "ay": -0.8128,
+        "bx": 3.048,
+        "by": -0.8128,
+        "half_thickness_m": 0.0508,
+        "z_min_ned": -1.7272,
+        "z_max_ned": 0.0
+      },
+      {
+        "name": "wall6",
+        "ax": 0.508,
+        "ay": 0.3048,
+        "bx": 2.1209,
+        "by": 0.3048,
+        "half_thickness_m": 0.0508,
+        "z_min_ned": -1.7272,
+        "z_max_ned": 0.0
+      },
+      {
+        "name": "tunnel_rib0",
+        "ax": -0.2921,
+        "ay": 1.8034,
+        "bx": -0.2921,
+        "by": 2.8194,
+        "half_thickness_m": 0.0127,
+        "z_min_ned": -0.2776,
+        "z_max_ned": 0.0
+      },
+      {
+        "name": "tunnel_rib1",
+        "ax": 0.4572,
+        "ay": 1.8034,
+        "bx": 0.4572,
+        "by": 2.8194,
+        "half_thickness_m": 0.0127,
+        "z_min_ned": -0.2776,
+        "z_max_ned": 0.0
+      },
+      {
+        "name": "tunnel_rib2",
+        "ax": 1.2065,
+        "ay": 1.8034,
+        "bx": 1.2065,
+        "by": 2.8194,
+        "half_thickness_m": 0.0127,
+        "z_min_ned": -0.2776,
+        "z_max_ned": 0.0
+      },
+      {
+        "name": "tunnel_wall_post",
+        "ax": 0.4064,
+        "ay": 1.5748,
+        "bx": 0.508,
+        "by": 1.5748,
+        "half_thickness_m": 0.01,
+        "z_min_ned": -1.7272,
+        "z_max_ned": 0.0
+      }
+    ],
+    "boulders": [
+      {
+        "name": "boulder0",
+        "cx": -2.46888,
+        "cy": 2.01168,
+        "cz": 0.0,
+        "rx": 0.2286,
+        "ry": 0.2286,
+        "rz": 0.5334
+      },
+      {
+        "name": "boulder1",
+        "cx": -2.34696,
+        "cy": 0.79248,
+        "cz": 0.0,
+        "rx": 0.2286,
+        "ry": 0.2286,
+        "rz": 0.5334
+      },
+      {
+        "name": "boulder2",
+        "cx": -2.49936,
+        "cy": -2.56032,
+        "cz": 0.0,
+        "rx": 0.2286,
+        "ry": 0.2286,
+        "rz": 0.5334
+      },
+      {
+        "name": "boulder3",
+        "cx": -2.37744,
+        "cy": -1.34112,
+        "cz": 0.0,
+        "rx": 0.2286,
+        "ry": 0.2286,
+        "rz": 0.5334
+      },
+      {
+        "name": "boulder4",
+        "cx": -1.55448,
+        "cy": 2.52984,
+        "cz": 0.0,
+        "rx": 0.2286,
+        "ry": 0.2286,
+        "rz": 0.5334
+      }
+    ],
+    "tunnel": {
+      "x_min_ned": -0.3048,
+      "x_max_ned": 1.2192,
+      "y_min_ned": 1.5748,
+      "y_max_ned": 3.048,
+      "z_top_ned": -1.8542,
+      "y_center_ned": 2.3114,
+      "arch_inner_half_y_m": 0.728,
+      "arch_outer_half_y_m": 0.7366
+    }
+  },
+  "surface_mesh_summary": {
+    "num_vertices": 1529,
+    "num_triangles": 2920
+  }
+}
