@@ -3,3 +3,4 @@ __pycache__/
 .onboard/
 *.mcap
 *.db3
+.pytest_cache/
