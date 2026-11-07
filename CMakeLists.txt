@@ -29,6 +29,18 @@ else()
   message(WARNING "policynav: VPI not found, skipping vpi_stereo (stereo_backend:=sgbm still works)")
 endif()
 
+# C++ policy core (no ROS, no Python): .npz loader, observation plumbing (policynav/obs.py) and the NumPy policy
+# forward (policynav/policy_np.py). Built -O3 regardless of CMAKE_BUILD_TYPE (colcon's default is unoptimised).
+find_package(ZLIB REQUIRED)
+find_package(Eigen3 REQUIRED NO_MODULE)
+add_library(policynav_core STATIC
+  src/policy/npz.cpp)
+set_target_properties(policynav_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_compile_features(policynav_core PUBLIC cxx_std_17)
+target_compile_options(policynav_core PRIVATE -O3 -Wall -Wextra)
+target_include_directories(policynav_core PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+target_link_libraries(policynav_core PRIVATE ZLIB::ZLIB Eigen3::Eigen)
+
 ament_python_install_package(${PROJECT_NAME})
 install(PROGRAMS scripts/skybeta_policy scripts/stereo_depth scripts/handheld DESTINATION lib/${PROJECT_NAME})
 install(FILES launch/skybeta.launch.py launch/skybeta_climb_forward.launch.py DESTINATION share/${PROJECT_NAME}/launch)
