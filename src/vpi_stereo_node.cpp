@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -54,6 +55,35 @@ using sensor_msgs::msg::Image;
 
 namespace {
 double stamp_s(const builtin_interfaces::msg::Time& t) { return t.sec + 1e-9 * t.nanosec; }
+
+double ms_since(std::chrono::steady_clock::time_point t0) {
+  return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+}
+
+// Per-stage timing, reported as p50 / p95 / max every report period and then reset.
+struct StageTimes {
+  std::vector<std::pair<std::string, std::vector<double>>> stages;
+  void add(const std::string& name, double ms) {
+    for (auto& s : stages)
+      if (s.first == name) { s.second.push_back(ms); return; }
+    stages.push_back({name, {ms}});
+  }
+  std::string report() {
+    std::string out;
+    char buf[160];
+    for (auto& s : stages) {
+      auto& v = s.second;
+      if (v.empty()) continue;
+      std::sort(v.begin(), v.end());
+      auto pct = [&v](double q) { return v[std::min(v.size() - 1, static_cast<size_t>(q * (v.size() - 1) + 0.5))]; };
+      std::snprintf(buf, sizeof(buf), "\n  %-26s p50 %6.1f  p95 %6.1f  max %6.1f ms  (n=%zu)", s.first.c_str(), pct(0.5),
+                    pct(0.95), v.back(), v.size());
+      out += buf;
+      v.clear();
+    }
+    return out;
+  }
+};
 }  // namespace
 
 class VpiStereo : public rclcpp::Node {
@@ -80,8 +110,24 @@ class VpiStereo : public rclcpp::Node {
     sub_info_r_ = create_subscription<CameraInfo>(ns_r + "/camera_info", qos, [this](CameraInfo::ConstSharedPtr m) {
       if (!info_r_ && m->k[0] > 0) info_r_ = m;
     });
-    sub_l_ = create_subscription<Image>(ns_l + "/" + img, qos, [this](Image::ConstSharedPtr m) { left_ = m; try_pair(); });
-    sub_r_ = create_subscription<Image>(ns_r + "/" + img, qos, [this](Image::ConstSharedPtr m) { right_ = m; try_pair(); });
+    sub_l_ = create_subscription<Image>(ns_l + "/" + img, qos, [this](Image::ConstSharedPtr m) {
+      times_.add("0 camera->rx left (age)", 1e3 * (now().seconds() - stamp_s(m->header.stamp)));
+      left_ = m;
+      try_pair();
+    });
+    sub_r_ = create_subscription<Image>(ns_r + "/" + img, qos, [this](Image::ConstSharedPtr m) {
+      times_.add("0 camera->rx right (age)", 1e3 * (now().seconds() - stamp_s(m->header.stamp)));
+      right_ = m;
+      try_pair();
+    });
+    const double report_s = declare_parameter<double>("timing_report_s", 5.0);
+    if (report_s > 0)
+      report_timer_ = create_wall_timer(std::chrono::duration<double>(report_s), [this]() {
+        const std::string r = times_.report();
+        if (!r.empty())
+          RCLCPP_INFO(get_logger(), "timing (pairs %zu, unpaired %zu, decimated %zu):%s", n_pairs_, unpaired_,
+                      n_decimated_, r.c_str());
+      });
     pub_ = create_publisher<Image>("/policynav/depth/image", qos);
     pub_info_ = create_publisher<CameraInfo>("/policynav/depth/camera_info", qos);
     VPI_CHECK(vpiStreamCreate(VPI_BACKEND_CUDA, &stream_));
@@ -216,7 +262,7 @@ class VpiStereo : public rclcpp::Node {
     // input, a strict 1/rate_hz gap rejects every other pair about half the time (stamp jitter puts it a hair under
     // 66.7 ms), which halves the rate to ~10 Hz.
     const double now_s = tl;
-    if (now_s - t_last_ < 0.8 / rate_hz_) return;
+    if (now_s - t_last_ < 0.8 / rate_hz_) { ++n_decimated_; return; }
     if (!info_l_ || !info_r_) {
       RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000, "waiting for /oak/{left,right}/camera_info");
       return;
@@ -241,9 +287,13 @@ class VpiStereo : public rclcpp::Node {
   void match(const Image& l, const Image& r) {
     const double fB = fx_ * baseline_;
     const auto t0 = std::chrono::steady_clock::now();
+    times_.add("1 camera->match start (age)", 1e3 * (now().seconds() - stamp_s(l.header.stamp)));
     try {
+      auto ts = std::chrono::steady_clock::now();
       rectify_into(l, m1x_, m1y_, in8_l_);
       rectify_into(r, m2x_, m2y_, in8_r_);
+      times_.add("2 rectify x2 (CPU)", ms_since(ts));
+      ts = std::chrono::steady_clock::now();
       VPIConvertImageFormatParams cvp;
       VPI_CHECK(vpiInitConvertImageFormatParams(&cvp));
       VPI_CHECK(vpiSubmitConvertImageFormat(stream_, VPI_BACKEND_CUDA, in8_l_, in16_l_, &cvp));
@@ -256,10 +306,12 @@ class VpiStereo : public rclcpp::Node {
       VPI_CHECK(vpiSubmitStereoDisparityEstimator(stream_, VPI_BACKEND_CUDA, payload_, in16_l_, in16_r_, disp_, conf_,
                                                   &sp));
       VPI_CHECK(vpiStreamSync(stream_));
+      times_.add("3 VPI convert+SGM (GPU)", ms_since(ts));
     } catch (const std::exception& e) {
       RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 5000, "VPI: %s", e.what());
       return;
     }
+    const auto t_depth = std::chrono::steady_clock::now();
     auto out = std::make_unique<Image>();
     out->header.stamp = l.header.stamp;
     out->header.frame_id = frame_;
@@ -298,6 +350,7 @@ class VpiStereo : public rclcpp::Node {
       RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 5000, "VPI: %s", e.what());
       return;
     }
+    times_.add("4 disparity->metres (CPU)", ms_since(t_depth));
     auto ci = std::make_unique<CameraInfo>();
     ci->header = out->header;
     ci->width = w_;
@@ -307,9 +360,14 @@ class VpiStereo : public rclcpp::Node {
     ci->r = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
     ci->distortion_model = "plumb_bob";
     ci->d = {0.0, 0.0, 0.0, 0.0, 0.0};
+    const auto t_pub = std::chrono::steady_clock::now();
     pub_->publish(std::move(out));
     pub_info_->publish(std::move(ci));
-    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    times_.add("5 publish depth", ms_since(t_pub));
+    times_.add("6 match total", ms_since(t0));
+    times_.add("7 camera->depth out (age)", 1e3 * (now().seconds() - stamp_s(l.header.stamp)));
+    ++n_pairs_;
+    const double ms = ms_since(t0);
     RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000, "VPI stereo (rectify + match) %.1f ms, valid %.0f%%", ms,
                          100.0 * valid / (static_cast<double>(w_) * h_));
   }
@@ -319,7 +377,9 @@ class VpiStereo : public rclcpp::Node {
   bool integer_;
   int w_ = 0, h_ = 0;
   uint32_t src_w_ = 0, src_h_ = 0;
-  size_t unpaired_ = 0;
+  size_t unpaired_ = 0, n_pairs_ = 0, n_decimated_ = 0;
+  StageTimes times_;
+  rclcpp::TimerBase::SharedPtr report_timer_;
   double t_last_ = 0.0;
   bool rect_ready_ = false;
   double fx_ = 0, cx_ = 0, cy_ = 0, baseline_ = 0;
