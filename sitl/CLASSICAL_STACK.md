@@ -10,7 +10,8 @@ for that specific flight, SITL included**. Dry runs are always fine.
 ## Status (2026-11-08)
 - **The rig** (`sitl/`, branch `sitl-humble`) is written and has not run yet. The first `run_rig.sh build` failed
   configuring PX4: its Gazebo optical-flow plugin needs `libopencv-dev`. The Dockerfile now installs it, but the
-  rebuild hasn't been run yet. Treat the rig as unproven until `docs/SITL.md`'s Status says it flies.
+  build now succeeds, but `run_rig.sh up` fails at Gazebo startup (see `sitl/HANDOFF.md`). Treat the rig as
+  unproven until `docs/SITL.md`'s Status says it flies.
 - **The classical stack** (branch `isam2`, which includes `ego-planner-v2`) has `astar_planner_node`,
   `mppi_controller_node`, `isam2_depth_node`, `path_transformer_node`, `control_mux_node`,
   `launch/maze_autonomy.launch.py` and `docs/ISAM2.md`. It was written against Jazzy, px4_msgs `release/1.17` and an

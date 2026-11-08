@@ -104,7 +104,9 @@ The rig stands in for the drone; it is not the drone:
 
 ## Status (2026-11-08)
 - First build on the dev Jetson (2026-11-08): PX4's configure failed, because the Gazebo optical-flow plugin needs
-  `libopencv-dev`. The Dockerfile now installs it; the rebuild has not been run yet. Nothing has run past the image build.
+  `libopencv-dev`. The Dockerfile now installs it, and `build` (image, PX4, workspace) now succeeds on the Jetson.
+- `up` fails: Gazebo starts but `gz topic -l` lists nothing, so the clock check times out (`gz did not start`) and
+  nothing after it runs. Not solved; the evidence and the next tests are in `sitl/HANDOFF.md`.
 - The plan for the classical stack (A*, MPPI, iSAM2, cuVSLAM) and drone data for replay: `sitl/CLASSICAL_STACK.md`.
 - Before that build, it had never run (no docker access on the dev Jetson). The pure parts are tested in
   `tests/test_sitl.py`: the parameter layering, the VIO frame/drift/velocity maths, and the depth intrinsics and
