@@ -319,8 +319,11 @@ TrajectorySetpointCmd MPPIController::computeCommand(
                         0.12 * (diff * diff * diff) / std::max(0.03, d_obs - cfg_.lethal_distance_m));
         }
 
-        // Altitude & outer-net geofence barrier
-        const double alt = -pos.z();
+        // Altitude & outer-net geofence barrier, in the MAP (arena) frame: rollouts are in odom, whose origin is the
+        // launch mark on SITL / the drone. Evaluated in odom, the "net" at 2.65 sat at arena E = 0.135, right in
+        // front of gate A (every 2026-11-08 SITL flight stalled there); sim_loopback has map == odom and hid it.
+        const Eigen::Vector3d pos_map = T_map_odom_.apply(pos);
+        const double alt = -pos_map.z();
         if (alt < 0.20) {
           const double d_alt = 0.20 - alt;
           total_cost += 220.0 * d_alt * d_alt;
@@ -328,7 +331,7 @@ TrajectorySetpointCmd MPPIController::computeCommand(
           const double d_alt = alt - 1.62;
           total_cost += 220.0 * d_alt * d_alt;
         }
-        const double max_xy = std::max(std::abs(pos.x()), std::abs(pos.y()));
+        const double max_xy = std::max(std::abs(pos_map.x()), std::abs(pos_map.y()));
         if (max_xy > 2.65) {
           const double d_net = max_xy - 2.65;
           total_cost += 180.0 * d_net * d_net;
@@ -451,21 +454,27 @@ TrajectorySetpointCmd MPPIController::computeCommand(
     const MPPIControl& u0 = u_mean_[0];
     Eigen::Vector3d v_cmd_odom = u0.vel_cmd_ned;
 
-    // Exponential Control Barrier Function (CBF) near outer arena net walls (|x|, |y| <= 2.86m)
-    if (state_odom.pos_odom.x() > 2.05) {
-      const double v_lim = 2.0 * std::max(0.0, 2.85 - state_odom.pos_odom.x());
-      if (v_cmd_odom.x() > v_lim) v_cmd_odom.x() = v_lim;
-    } else if (state_odom.pos_odom.x() < -2.05) {
-      const double v_lim = -2.0 * std::max(0.0, 2.85 + state_odom.pos_odom.x());
-      if (v_cmd_odom.x() < v_lim) v_cmd_odom.x() = v_lim;
+    // Exponential Control Barrier Function (CBF) near outer arena net walls (|x|, |y| <= 2.86m), in the MAP
+    // (arena) frame: position and velocity go odom -> map, are clamped, and the velocity comes back. In odom
+    // (origin = launch mark on SITL / the drone) it clamped east velocity from arena E = -0.46 and stopped it past
+    // E = 0.34 (gate A), and stopped southward motion past arena N = -1.94 (the window).
+    const Eigen::Vector3d p_map = T_map_odom_.apply(state_odom.pos_odom);
+    Eigen::Vector3d v_map = T_map_odom_.rotate(v_cmd_odom);
+    if (p_map.x() > 2.05) {
+      const double v_lim = 2.0 * std::max(0.0, 2.85 - p_map.x());
+      if (v_map.x() > v_lim) v_map.x() = v_lim;
+    } else if (p_map.x() < -2.05) {
+      const double v_lim = -2.0 * std::max(0.0, 2.85 + p_map.x());
+      if (v_map.x() < v_lim) v_map.x() = v_lim;
     }
-    if (state_odom.pos_odom.y() > 2.05) {
-      const double v_lim = 2.0 * std::max(0.0, 2.85 - state_odom.pos_odom.y());
-      if (v_cmd_odom.y() > v_lim) v_cmd_odom.y() = v_lim;
-    } else if (state_odom.pos_odom.y() < -2.05) {
-      const double v_lim = -2.0 * std::max(0.0, 2.85 + state_odom.pos_odom.y());
-      if (v_cmd_odom.y() < v_lim) v_cmd_odom.y() = v_lim;
+    if (p_map.y() > 2.05) {
+      const double v_lim = 2.0 * std::max(0.0, 2.85 - p_map.y());
+      if (v_map.y() > v_lim) v_map.y() = v_lim;
+    } else if (p_map.y() < -2.05) {
+      const double v_lim = -2.0 * std::max(0.0, 2.85 + p_map.y());
+      if (v_map.y() < v_lim) v_map.y() = v_lim;
     }
+    v_cmd_odom = T_map_odom_.unrotate(v_map);
 
     cmd.pos_ned = step1_st.posNed();
     cmd.vel_ned = v_cmd_odom;

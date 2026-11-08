@@ -131,6 +131,28 @@ Checked (no arming): `SKYBETA=1 EV_SOURCE=truth_odom` -> spawn on the pad, PX4 x
 `sim_pilot.py --check` -> Altitude -> Position on the ground ("check passed"); `SKYBETA=1 EV_SOURCE=cuvslam` ->
 Multicamera, 283 features/frame on the pad, PX4 valid. Not checked: an armed flight with these changes.
 
+### A* wall clearance (`launch/maze_autonomy.launch.py astar_*`)
+
+The A* path keeps the drone's centre `astar_clearance_m` (default 0.30) from walls, but allows
+`astar_clearance_m x astar_clearance_fallback_ratio` (default 0.75, so 0.225 m) within 0.3 m of every goal and gate,
+and on a whole leg when a gate is otherwise unreachable. `astar_centre_dist_m` / `astar_centre_weight` (0.60 / 1.5)
+pull the path to the middle of corridors narrower than 2x the distance. Swept offline on course_groundtruth.bin
+(2026-11-08): **corridor_end needs a minimum (clearance x ratio) <= 0.240 m**; any higher and A* skips it ("unreachable,
+skipped: corridor_end") and the path misses that checkpoint. Defaults give min 0.240 m along the path. 0.40 x 0.60
+keeps corridor_end with more room elsewhere (15.8 m vs 15.3 m path). Results right at 0.24 m depend on the 5 cm grid,
+so check the planner log ("min clearance", "skipped") after any change.
+
+`mppi_safe_distance_m` (default 0.42) is the MPPI's obstacle comfort radius: cost starts there, shrinking per horizon
+step to the reference's own clearance (floor lethal 0.21 + 0.02).
+
+**Gate A stall (fixed 2026-11-08):** every SITL maze flight stopped at arena E ~0.13, just short of gate A, dithered,
+and drifted into the north net. Cause: MPPI's outer-net cost barrier and its net velocity CBF compared the ODOM
+position with arena bounds. Odom's origin is the launch mark on SITL and the drone, so the "net" sat at arena
+E = 0.135 (cost) / E = 0.34 (velocity clamp), and at N = -1.94 (would have blocked the window). Both now work in the map
+frame. sim_loopback publishes map == odom, so it could not show this; `testMPPIGateAWithOdomOffset` and
+`testMPPIWindowWithOdomOffset` run MPPI closed loop with the SITL odom offset. Any map-frame rule inside the stack
+must go through T_map_odom.
+
 ### Our airframe in Gazebo (`MODEL=dronehacks_stereo`, the default since 2026-11-08)
 
 PX4's x500 reaches ~0.39 m from its centre (rotors 0.246 m out, 0.14 m props); the planner and MPPI plan for our drone

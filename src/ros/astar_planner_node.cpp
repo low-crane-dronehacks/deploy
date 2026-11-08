@@ -46,6 +46,16 @@ class AStarPlannerNode : public rclcpp::Node {
     cfg.arena_half_m = declare_parameter<double>("arena_half_m", cfg.arena_half_m);
     cfg.flight_z_ned = declare_parameter<double>("flight_z_ned", cfg.flight_z_ned);
     cfg.clearance_m = declare_parameter<double>("clearance_m", cfg.clearance_m);
+    cfg.clearance_fallback_ratio = declare_parameter<double>("clearance_fallback_ratio", cfg.clearance_fallback_ratio);
+    cfg.centre_dist_m = declare_parameter<double>("centre_dist_m", cfg.centre_dist_m);
+    cfg.centre_weight = declare_parameter<double>("centre_weight", cfg.centre_weight);
+    cfg.snap_radius_m = declare_parameter<double>("snap_radius_m", cfg.snap_radius_m);
+    if (cfg.clearance_m <= 0.0 || cfg.clearance_fallback_ratio <= 0.0 || cfg.clearance_fallback_ratio > 1.0) {
+      throw std::runtime_error("astar_planner_node: need clearance_m > 0 and 0 < clearance_fallback_ratio <= 1");
+    }
+    RCLCPP_INFO(get_logger(), "clearance %.3f m (%.3f m near goals/gates and as a last resort), centre %.2f m x %.2f, "
+                "snap %.2f m", cfg.clearance_m, cfg.clearance_m * cfg.clearance_fallback_ratio, cfg.centre_dist_m,
+                cfg.centre_weight, cfg.snap_radius_m);
     cfg.cruise_speed_m_s = declare_parameter<double>("cruise_speed_m_s", cfg.cruise_speed_m_s);
     cfg.lat_acc_m_s2 = declare_parameter<double>("lat_acc_m_s2", cfg.lat_acc_m_s2);
     cfg.yaw_rate_max_rad_s = declare_parameter<double>("yaw_rate_max_rad_s", cfg.yaw_rate_max_rad_s);

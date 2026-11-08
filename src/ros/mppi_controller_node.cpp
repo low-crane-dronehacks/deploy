@@ -118,6 +118,15 @@ class MPPIControllerNode : public rclcpp::Node {
     mcfg.w_orientation = declare_parameter<double>("mppi_w_orientation", mcfg.w_orientation);
     mcfg.w_fov = declare_parameter<double>("mppi_w_fov", mcfg.w_fov);
     mcfg.fov_half_angle_rad = declare_parameter<double>("mppi_fov_half_angle_rad", mcfg.fov_half_angle_rad);
+    // Obstacle comfort radius (cost starts here; adaptive: never more than the reference's own clearance) and the
+    // hard collision radius.
+    mcfg.safe_distance_m = declare_parameter<double>("mppi_safe_distance_m", mcfg.safe_distance_m);
+    mcfg.lethal_distance_m = declare_parameter<double>("mppi_lethal_distance_m", mcfg.lethal_distance_m);
+    if (mcfg.safe_distance_m < mcfg.lethal_distance_m) {
+      throw std::runtime_error("mppi_controller_node: mppi_safe_distance_m must be >= mppi_lethal_distance_m");
+    }
+    RCLCPP_INFO(get_logger(), "comfort radius %.3f m (adaptive, floor %.3f m), lethal %.3f m", mcfg.safe_distance_m,
+                mcfg.lethal_distance_m + mcfg.adaptive_safe_margin_m, mcfg.lethal_distance_m);
     QuadPlantParams plant{};
     mppi_ = std::make_shared<MPPIController>(mcfg, plant, costmap_);
 

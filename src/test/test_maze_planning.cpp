@@ -548,6 +548,101 @@ void testAStarPlannerCourse() {
               rr.path.total_length_m);
 }
 
+// SITL / the drone: odom's origin is the launch mark, not the arena origin. Closed loop from where every
+// 2026-11-08 SITL flight stalled (just short of gate A, facing east), with odom offset from map as there: MPPI must
+// take the vehicle through gate A. A map-frame cost evaluated in odom (the outer-net barrier did) puts a phantom
+// wall at arena E = 0.135 here; sim_loopback (map == odom) cannot show it.
+void testMPPIGateAWithOdomOffset() {
+  auto gt = std::make_shared<GroundTruthMap>();
+  gt->loadFromBinary("config/course_groundtruth.bin");
+  auto costmap = std::make_shared<VoxelCostmap>(VoxelCostmapConfig{}, gt);
+  AStarConfig acfg{};
+  acfg.cruise_speed_m_s = 0.5;
+  AStarPlanner astar(acfg, gt);
+  const auto all = courseGoalsFromArenaPrior();
+  const std::vector<PlanGoal> goals(all.begin() + 1, all.begin() + 3);   // gate_a, tunnel_exit
+  const Eigen::Vector3d start_map(2.54, 0.13, -0.8);
+  const AStarPlanResult r = astar.plan(start_map, goals);
+  CHECK(r.ok && r.skipped.empty(), "A* from the gate A stall point failed");
+  const Eigen::Vector3d lm(0.9144, -2.5146, 0.0);                       // launch mark = odom origin (map frame)
+  PlannedPath ref_odom = r.path;
+  for (auto& pt : ref_odom.points) pt.pos -= lm;
+  SE3Transform T_map_odom{};
+  T_map_odom.t = lm;
+
+  MPPIConfig mcfg{};
+  mcfg.num_samples = 512;
+  MPPIController mppi(mcfg, QuadPlantParams{}, costmap);
+  mppi.setOdomToMapTransform(T_map_odom);
+  QuadPlant truth;
+  QuadState s = truth.fromNed(start_map - lm, Eigen::Vector3d::Zero(),
+                              Eigen::Quaterniond(Eigen::AngleAxisd(1.48, Eigen::Vector3d::UnitZ())));
+  double min_clr = 1e9, max_e = -1e9;
+  for (int i = 0; i < 120; ++i) {   // 6 s
+    VehicleKinematics vk{};
+    vk.timestamp_s = 1.0 + 0.05 * i;
+    vk.pos_odom = s.posNed();
+    vk.vel_odom = s.velNed();
+    vk.q_odom_base = Eigen::Quaterniond(s.rotNed());
+    const TrajectorySetpointCmd cmd = mppi.computeCommand(vk, ref_odom);
+    truth.stepWorld(s, cmd.vel_ned, cmd.yawspeed_rad_s, 0.05);
+    const Eigen::Vector3d p_map = s.posNed() + lm;
+    max_e = std::max(max_e, p_map.y());
+    min_clr = std::min(min_clr, costmap->clearance(p_map));
+  }
+  CHECK(max_e > 0.80, "did not get through gate A in 6 s: max arena E %.3f m (gate line 0.305; path heads on to E > 1)", max_e);
+  CHECK(min_clr > 0.21, "came within %.3f m of a wall or the net", min_clr);
+  std::printf("[PASS] testMPPIGateAWithOdomOffset (max arena E %.2f m, min clearance %.3f m)\n", max_e, min_clr);
+}
+
+// The window (arena N -2.28) lies south of the old odom-frame CBF limit (odom N -2.85 = arena N -1.94), which
+// stopped southward motion there. Same odom offset as SITL; MPPI must reach the window line.
+void testMPPIWindowWithOdomOffset() {
+  auto gt = std::make_shared<GroundTruthMap>();
+  gt->loadFromBinary("config/course_groundtruth.bin");
+  auto costmap = std::make_shared<VoxelCostmap>(VoxelCostmapConfig{}, gt);
+  AStarConfig acfg{};
+  acfg.cruise_speed_m_s = 0.5;
+  AStarPlanner astar(acfg, gt);
+  const auto all = courseGoalsFromArenaPrior();
+  const std::vector<PlanGoal> goals(all.begin() + 3, all.end());   // window, pad
+  const PlanGoal& win = all[3];
+  const Eigen::Vector3d start_map(-1.70, 0.20, -0.8);
+  const AStarPlanResult r = astar.plan(start_map, goals);
+  CHECK(r.ok && r.skipped.empty(), "A* to the window failed");
+  const Eigen::Vector3d lm(0.9144, -2.5146, 0.0);
+  PlannedPath ref_odom = r.path;
+  for (auto& pt : ref_odom.points) pt.pos -= lm;
+  SE3Transform T_map_odom{};
+  T_map_odom.t = lm;
+  MPPIConfig mcfg{};
+  mcfg.num_samples = 512;
+  MPPIController mppi(mcfg, QuadPlantParams{}, costmap);
+  mppi.setOdomToMapTransform(T_map_odom);
+  QuadPlant truth;
+  const Eigen::Vector2d d0 = r.path.points[std::min<std::size_t>(5, r.path.points.size() - 1)].pos.head<2>() -
+                             start_map.head<2>();
+  QuadState s = truth.fromNed(start_map - lm, Eigen::Vector3d::Zero(),
+                              Eigen::Quaterniond(Eigen::AngleAxisd(std::atan2(d0.y(), d0.x()), Eigen::Vector3d::UnitZ())));
+  const Eigen::Vector2d n = win.normal.normalized();
+  double best = -1e9, min_clr = 1e9;
+  for (int i = 0; i < 240; ++i) {   // 12 s
+    VehicleKinematics vk{};
+    vk.timestamp_s = 1.0 + 0.05 * i;
+    vk.pos_odom = s.posNed();
+    vk.vel_odom = s.velNed();
+    vk.q_odom_base = Eigen::Quaterniond(s.rotNed());
+    const TrajectorySetpointCmd cmd = mppi.computeCommand(vk, ref_odom);
+    truth.stepWorld(s, cmd.vel_ned, cmd.yawspeed_rad_s, 0.05);
+    const Eigen::Vector3d p_map = s.posNed() + lm;
+    best = std::max(best, (p_map.head<2>() - win.seg_a).dot(n));
+    min_clr = std::min(min_clr, costmap->clearance(p_map));
+  }
+  CHECK(best > 0.15, "did not cross the window line by the scoring margin in 12 s: %.3f m past it", best);
+  CHECK(min_clr > 0.21, "came within %.3f m of a wall or the net", min_clr);
+  std::printf("[PASS] testMPPIWindowWithOdomOffset (%.2f m past the window line, min clearance %.3f m)\n", best, min_clr);
+}
+
 int main() {
   testGroundTruthMapEncoding();
   testVoxelCostmapAndDisparityPunchThroughFMEA();
@@ -561,6 +656,8 @@ int main() {
   testMPPIRolloutsAndPillarEvasion();
   testMPPIPillarSplitIsPathRelative();
   testMPPIHeadingOffsetClosedLoop();
+  testMPPIGateAWithOdomOffset();
+  testMPPIWindowWithOdomOffset();
   testMPPICandidateRollouts();
   testControlMuxAndSafetyInterlocks();
   std::printf(failures ? "%d FAILURE(S)\n" : "ALL MAZE PLANNING (RRT* + MPPI + COSTMAP + MUX) C++ TESTS PASSED\n",

@@ -22,6 +22,7 @@ add_library(maze_planning_core SHARED
   ${SRC_ROOT}/astar_planner.cpp
   ${SRC_ROOT}/path_transformer.cpp
   ${SRC_ROOT}/mppi_controller.cpp
+  ${SRC_ROOT}/quad_plant.cpp
   ${SRC_ROOT}/control_mux.cpp
   ${SRC_ROOT}/c_api.cpp
 )
@@ -75,7 +76,7 @@ if(ament_cmake_FOUND)
   # Standalone RViz demo plant (sim_loopback:=true); never alongside SITL or the drone.
   add_executable(sim_loopback_node ${SRC_ROOT}/ros/sim_loopback_node.cpp)
   ament_target_dependencies(sim_loopback_node rclcpp tf2_ros nav_msgs geometry_msgs)
-  target_link_libraries(sim_loopback_node Eigen3::Eigen)
+  target_link_libraries(sim_loopback_node maze_planning_core Eigen3::Eigen)   # QuadPlant
 
   add_executable(mppi_controller_node ${SRC_ROOT}/ros/mppi_controller_node.cpp)
   target_link_libraries(mppi_controller_node maze_planning_core)
