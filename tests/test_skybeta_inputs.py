@@ -1,0 +1,107 @@
+"""Exercise real node methods without ROS middleware, which is absent on dev hosts.
+
+Load the class AST only; transport imports and ROS Node construction are excluded.
+The policy, input validation, observation and command conversion code remain real.
+"""
+import ast
+import json
+import math
+from pathlib import Path
+import time
+from types import SimpleNamespace as Msg
+
+import numpy as np
+import pytest
+
+from policynav import handheld as H, obs as O
+from policynav.px4_feedback import Px4Feedback
+from test_px4_feedback import lpos, att
+
+
+@pytest.fixture
+def node():
+    source = Path(__file__).parents[1] / 'policynav/skybeta_node.py'
+    tree = ast.parse(source.read_text())
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'Skybeta')
+    scope = dict(Node=object, np=np, math=math, json=json, time=time, H=H, O=O)
+    exec(compile(ast.Module(body=[cls], type_ignores=[]), str(source), 'exec'), scope)
+    n = object.__new__(scope['Skybeta'])
+    n._now = lambda: 10.1
+    n.feedback = Px4Feedback()
+    n.feedback.on_lpos(lpos(), 10.)
+    n.feedback.on_att(att(), 10.)
+    n.feedback_lost_s = n.state_lost_s = .5
+    n.phase, n.why, n.t_fly = 'fly', 'policy', 10.
+    n.state, n.state_t = dict(armed=True, offboard_active=True), 10.
+    n.depth_t, n.depth_stale_s, n.depth_lost_s = 10., .5, 2.
+    n.max_flight_s = 120.
+    n.cmd = ((1., 0., 0.), 0.)
+    n.get_logger = lambda: Msg(info=lambda *a, **k: None, warning=lambda *a, **k: None)
+    n.hold_cli = Msg(service_is_ready=lambda: False)
+    n._publish = lambda: None
+    n.steps = []
+    n._step = lambda t: n.steps.append(t)
+    return n
+
+
+@pytest.mark.parametrize('kind', ['state', 'attitude', 'range', 'disarm', 'offboard'])
+def test_bad_input_prevents_policy_step(node, kind):
+    if kind == 'state':
+        node.state_t = 9.
+    elif kind == 'attitude':
+        node.feedback.att_t = 9.
+    elif kind == 'range':
+        node._on_lpos(lpos(timestamp_sample=1_100_000, dist_bottom_valid=False))
+    elif kind == 'disarm':
+        node.state['armed'] = False
+    else:
+        node.state['offboard_active'] = False
+    node._tick()
+    assert not node.steps
+    assert node.phase in ('hold', 'yielded')
+    assert node.cmd == ((0., 0., 0.), 0.)
+
+
+def test_valid_inputs_allow_policy(node):
+    node._tick()
+    assert node.steps == [10.1]
+
+
+def test_hold_yields_permanently_on_pilot_takeover(node):
+    node._hold('test')
+    node.state['offboard_active'] = False
+    node._tick()
+    assert node.phase == 'yielded'
+    node.state['offboard_active'] = True
+    node._tick()
+    assert node.phase == 'yielded' and not node.steps
+
+
+@pytest.mark.parametrize('data', ['[]', 'null', '{', '{"armed":"false","offboard_active":true}'])
+def test_malformed_state_cannot_refresh_watchdog(node, data):
+    node._on_state(Msg(data=data))
+    assert node.state_t == 10.
+
+
+def test_no_altitude_or_constant_range_fallback(node):
+    node.feedback.range_m = None
+    assert node._range() is None
+
+
+def test_px4_inputs_reach_real_policy_step_and_enu_output(node):
+    seen = []
+    node.meta = dict(rf_max=4., v_obs_scale=[1., 1., 1.])
+    node.airborne = False
+    node.stack = O.FrameStack(2)
+    node.depth_img = np.ones((80, 128), np.float32)
+    node.prev_action = np.zeros(4)
+    def policy(img, pro):
+        seen.append(pro)
+        return np.array([.5, 0., 0., .2])
+    node.policy = policy
+    node.v_max, node.yaw_max = [1., 1., 1.], 1.
+    node.speed_cap, node.yaw_cap, node.timing = 1.45, 1., []
+    type(node)._step(node, 10.1)
+    assert seen[0][:6] == pytest.approx([1., 0., -.2, .8, 0., 0.], abs=1e-6)
+    assert node.cmd[0] == pytest.approx([.5, 0., 0.], abs=1e-6)
+    assert node.cmd[1] == pytest.approx(-.2)

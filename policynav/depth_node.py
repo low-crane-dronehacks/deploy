@@ -100,6 +100,7 @@ class DepthNode(Node):
             self.maps = [S.rect_maps(c.k, c.d, c.r, c.p, c.width, c.height, p.out_w, p.out_h, c.distortion_model)
                          for c in (L, R)]
             self.baseline = S.rect_baseline_m(R.p)
+            S.validate_stereo_baseline(self.baseline)
             self.fx, self.fy, self.cx, self.cy = S.rectified_intrinsics(L.p, L.width, L.height, p.out_w, p.out_h)
             Rl = np.asarray(L.r, float).reshape(3, 3)
             how = 'camera_info rectification'
@@ -121,6 +122,7 @@ class DepthNode(Node):
                 np.reshape(L.k, (3, 3)), dist(L), np.reshape(R.k, (3, 3)), dist(R), L.width, L.height,
                 R_lr, (t.x, t.y, t.z), p.out_w, p.out_h, alpha=0.0)
             self.fy = self.fx
+            S.validate_stereo_baseline(self.baseline)
             self.maps = [m1, m2]
             how = 'rectified from TF extrinsics'
         self.frame = L.header.frame_id + '_rect'

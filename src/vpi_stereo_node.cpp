@@ -164,6 +164,11 @@ class VpiStereo : public rclcpp::Node {
     for (int i = 0; i < 3; ++i)
       for (int j = 0; j < 3; ++j) R_lr(i, j) = m[i][j];
     const cv::Vec3d t_lr(t.x, t.y, t.z);
+    if (!std::isfinite(t.x) || t.x <= 0.0) {
+      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 5000,
+          "Invalid stereo baseline: right eye must be at +x in left optical frame. Check calibration/eye ordering; no depth published.");
+      return false;
+    }
     const cv::Matx33d R_rl = R_lr.t();                      // stereoRectify wants x_right = R x_left + T
     const cv::Vec3d T = -(R_rl * t_lr);
     const double sx = static_cast<double>(out_w_) / L.width, sy = static_cast<double>(out_h_) / L.height;
@@ -189,7 +194,12 @@ class VpiStereo : public rclcpp::Node {
     fx_ = P1.at<double>(0, 0);
     cx_ = P1.at<double>(0, 2);
     cy_ = P1.at<double>(1, 2);
-    baseline_ = std::abs(-P2.at<double>(0, 3) / P2.at<double>(0, 0));
+    baseline_ = -P2.at<double>(0, 3) / P2.at<double>(0, 0);
+    if (!std::isfinite(baseline_) || baseline_ <= 0.0) {
+      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 5000,
+          "Invalid rectified stereo baseline: check calibration/eye ordering; no depth published.");
+      return false;
+    }
     src_w_ = L.width;
     src_h_ = L.height;
     frame_ = L.header.frame_id + "_rect";

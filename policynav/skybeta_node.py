@@ -10,13 +10,14 @@ The skybeta contract (~/skybeta/docs/competitor_guide.md on the drone):
   * /skybeta/hold (Trigger) freezes at the last safe position; the pilot lands (there is no land command).
 
   in   depth (policynav/depth_node.py: /policynav/depth/image + camera_info), TF base_link <- depth frame
-       /visual_slam/tracking/odometry (nav_msgs/Odometry, ENU/FLU)   attitude + velocity
-       /fmu/out/vehicle_local_position (dist_bottom: the VL53L1X)   downward range (read only)
+       /fmu/out/vehicle_attitude                                  PX4 FRD->NED attitude
+       /fmu/out/vehicle_local_position                            PX4 NED velocity + dist_bottom
        /skybeta/state (JSON)                                         armed / offboard_active
   out  /skybeta/setpoint/twist at 10 Hz: zero until Offboard is active, then the policy's command
        /policynav/status (JSON)
 
-Stops commanding (zero twist + /skybeta/hold) on stale depth or odometry, at max_flight_s, or after touchdown.
+Holds on invalid/stale PX4 inputs or depth, at max_flight_s, or after touchdown.
+Stops publishing permanently on stale interface state, disarm, or Offboard loss.
 """
 from __future__ import annotations
 
@@ -38,9 +39,10 @@ from . import handheld as H
 from . import obs as O
 from .node import decode_depth
 from .policy_np import NumpyPolicy, resolve_policy
+from .px4_feedback import Px4Feedback
 from .transport import LATEST, tf_listener
 
-PX4_QOS = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, durability=DurabilityPolicy.TRANSIENT_LOCAL,
+PX4_QOS = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, durability=DurabilityPolicy.VOLATILE,
                      history=HistoryPolicy.KEEP_LAST, depth=1)
 
 
@@ -58,11 +60,11 @@ class Skybeta(Node):
         self.yaw_cap = float(dp('yaw_rate_cap', 0.0)) or float(self.yaw_max)   # 0 = the policy's trained yaw limit; VO dislikes fast spins
         self.max_flight_s = float(dp('max_flight_s', 120.0))
         self.depth_stale_s, self.depth_lost_s = float(dp('depth_stale_s', 0.5)), float(dp('depth_lost_s', 2.0))
-        self.odom_lost_s = float(dp('odom_lost_s', 0.5))
+        self.feedback_lost_s = float(dp('feedback_lost_s', 0.5))
+        self.state_lost_s = float(dp('state_lost_s', 0.5))
+        self.feedback = Px4Feedback(self.feedback_lost_s)
         self.twist_frame = dp('twist_frame', 'odom')
         self.base_frame = dp('base_frame', 'base_link')
-        self.range_source = dp('range_source', 'px4')             # px4 (dist_bottom) | altitude
-        self.start_height = float(dp('start_height_m', 0.08))
         mismatch = [round(float(v), 2) for v in self.v_max]
         if math.sqrt(sum(float(v) ** 2 for v in self.v_max)) > 1.5 + 1e-6:
             self.get_logger().warning(f'policy v_max {mismatch} exceeds the 1.5 m/s envelope: commands will be scaled '
@@ -72,34 +74,30 @@ class Skybeta(Node):
         self.tf_buffer = Buffer()
         # transport: /tf_static only (the depth frame chain is static); tf_static_only:=false restores /tf too
         self.tf_listener = tf_listener(self.tf_buffer, self, bool(dp('tf_static_only', True)))
-        from nav_msgs.msg import Odometry
-        self.create_subscription(Odometry, dp('odom_topic', '/visual_slam/tracking/odometry'), self._on_odom, LATEST)
+        from px4_msgs.msg import VehicleAttitude, VehicleLocalPosition
+        self.create_subscription(VehicleAttitude, dp('attitude_topic', '/fmu/out/vehicle_attitude'),
+                                 self._on_att, PX4_QOS)
+        self.create_subscription(VehicleLocalPosition, dp('lpos_topic', '/fmu/out/vehicle_local_position'),
+                                 self._on_lpos, PX4_QOS)
         self.create_subscription(String, dp('state_topic', '/skybeta/state'), self._on_state, 10)
         self.create_subscription(CameraInfo, dp('depth_info_topic', '/policynav/depth/camera_info'), self._on_info,
                                  qos_profile_sensor_data)
         self.create_subscription(Image, dp('depth_topic', '/policynav/depth/image'), self._on_depth,
                                  LATEST)
-        if self.range_source == 'px4':
-            from px4_msgs.msg import VehicleLocalPosition
-            self.create_subscription(VehicleLocalPosition, dp('lpos_topic', '/fmu/out/vehicle_local_position'),
-                                     self._on_lpos, PX4_QOS)
         self.pub = self.create_publisher(TwistStamped, dp('twist_topic', '/skybeta/setpoint/twist'), 10)
         self.pub_status = self.create_publisher(String, '/policynav/status', 10)
         from std_srvs.srv import Trigger
         self.hold_cli = self.create_client(Trigger, dp('hold_service', '/skybeta/hold'))
         self._Trigger = Trigger
 
-        self.q = self.vel = self.pos = None
-        self.odom_t = None
-        self.range_m = None
         self.state = {}
+        self.state_t = None
         self.K = self.reproj = None
         self.depth_img, self.depth_t = None, None
         self.stack = O.FrameStack(self.meta['frame_stack'])
         self.prev_action = np.zeros(self.n_act, np.float32)
         self.phase, self.why = 'wait', 'waiting for Offboard (pilot arms, then Position)'
         self.t_fly = None
-        self.home = None
         self.airborne = False
         self.cmd = ((0.0, 0.0, 0.0), 0.0)
         self.timing = []
@@ -109,27 +107,23 @@ class Skybeta(Node):
                                f"publishing zero twists until Offboard")
 
     def _now(self):
-        return self.get_clock().now().nanoseconds * 1e-9
+        return time.monotonic()
 
     # ── inputs ──
     def _on_state(self, m):
         try:
-            self.state = json.loads(m.data)
+            state = json.loads(m.data)
         except ValueError:
-            pass
-
-    def _on_odom(self, m):
-        p, o, v = m.pose.pose.position, m.pose.pose.orientation, m.twist.twist.linear
-        if not all(math.isfinite(c) for c in (p.x, p.y, p.z, o.x, o.y, o.z, o.w, v.x, v.y, v.z)):
             return
-        self.pos, self.q = H.ros_pose_to_ned((p.x, p.y, p.z), (o.x, o.y, o.z, o.w))
-        self.vel = H.body_flu_to_ned((v.x, v.y, v.z), self.q)
-        self.odom_t = self._now()
+        if not isinstance(state, dict) or any(type(state.get(k)) is not bool for k in ('armed', 'offboard_active')):
+            return
+        self.state, self.state_t = state, self._now()
+
+    def _on_att(self, m):
+        self.feedback.on_att(m, self._now(), active=self.phase == 'fly')
 
     def _on_lpos(self, m):
-        ok = getattr(m, 'dist_bottom_valid', True)
-        if ok and math.isfinite(m.dist_bottom) and m.dist_bottom > 0:
-            self.range_m = float(m.dist_bottom)
+        self.feedback.on_lpos(m, self._now(), active=self.phase == 'fly')
 
     def _on_info(self, m):
         if m.k[0] > 0 and self.K is None:
@@ -158,11 +152,9 @@ class Skybeta(Node):
             self.get_logger().error(str(e), throttle_duration_sec=5.0)
 
     def _range(self):
-        if self.range_source == 'px4' and self.range_m is not None:
-            return float(np.clip(self.range_m, 0.04, self.meta['rf_max']))
-        if self.pos is not None and self.home is not None:
-            return float(np.clip(self.start_height - (self.pos[2] - self.home[2]), 0.04, self.meta['rf_max']))
-        return 0.08
+        if self.feedback.range_m is None:
+            return None
+        return float(np.clip(self.feedback.range_m, 0.04, self.meta['rf_max']))
 
     # ── control ──
     def _hold(self, why):
@@ -174,23 +166,28 @@ class Skybeta(Node):
 
     def _tick(self):
         t = self._now()
-        offboard = bool(self.state.get('offboard_active', False))
+        state_fresh = self.state_t is not None and 0 <= t - self.state_t <= self.state_lost_s
+        offboard = state_fresh and self.state.get('offboard_active', False) and self.state.get('armed', False)
+        # A held mission must also yield to pilot takeover; never revive an old command.
+        if self.phase in ('fly', 'hold') and not offboard:
+            self.phase, self.why = 'yielded', 'interface state lost, Offboard ended or disarmed'
+            self.cmd = ((0.0, 0.0, 0.0), 0.0)
+        feedback_error = self.feedback.error(t, self.feedback_lost_s)
         if self.phase == 'wait' and offboard:
-            if self.odom_t is None or self.depth_t is None:
-                self._hold('Offboard started without odometry or depth')
+            if feedback_error or self.depth_t is None or not 0 <= t - self.depth_t <= self.depth_stale_s:
+                self._hold(feedback_error or 'Offboard started without fresh depth')
             else:
                 self.phase, self.why, self.t_fly = 'fly', 'policy', t
                 self.policy.reset()
                 self.stack.reset()
                 self.prev_action[:] = 0.0
-                self.home = self.pos
                 self.get_logger().info('Offboard active: policy flying')
         if self.phase == 'fly':
             if not offboard:
                 self.phase, self.why = 'yielded', 'Offboard ended (pilot took over or disarmed)'
                 self.get_logger().info(self.why)
-            elif self.odom_t is None or t - self.odom_t > self.odom_lost_s:
-                self._hold('odometry lost')
+            elif feedback_error:
+                self._hold(feedback_error)
             elif self.depth_t is None or t - self.depth_t > self.depth_lost_s:
                 self._hold('depth lost')
             elif t - self.t_fly > self.max_flight_s:
@@ -204,15 +201,15 @@ class Skybeta(Node):
     def _step(self, t):
         rng = self._range()
         self.airborne |= rng > 0.3
-        if self.airborne and rng < 0.12 and self.vel is not None and np.linalg.norm(self.vel) < 0.3:
+        if self.airborne and rng < 0.12 and np.linalg.norm(self.feedback.vel) < 0.3:
             self._hold('touched down')
             return
         t0 = time.perf_counter()
         img = self.stack.push(self.depth_img)
-        pro = O.proprio(self.vel, self.q, rng, self.prev_action, self.meta.get('v_obs_scale', self.v_max))
+        pro = O.proprio(self.feedback.vel, self.feedback.q, rng, self.prev_action, self.meta['v_obs_scale'])
         a = np.clip(self.policy(img, pro), -1.0, 1.0).astype(np.float32)
         self.prev_action = a
-        vel_ned, yawspeed = O.action_to_setpoint(a[:4], self.q, self.v_max, self.yaw_max)
+        vel_ned, yawspeed = O.action_to_setpoint(a[:4], self.feedback.q, self.v_max, self.yaw_max)
         v_enu, wz = H.ned_to_enu_twist(vel_ned, yawspeed)
         self.cmd = (H.cap_norm(v_enu, self.speed_cap), float(np.clip(wz, -self.yaw_cap, self.yaw_cap)))
         self.timing.append(time.perf_counter() - t0)
@@ -233,8 +230,11 @@ class Skybeta(Node):
         st = {'mode': 'skybeta', 'phase': self.phase, 'why': self.why,
               'offboard_active': bool(self.state.get('offboard_active', False)), 'armed': self.state.get('armed'),
               'cmd_enu': [round(vx, 2), round(vy, 2), round(vz, 2)], 'yaw_rate': round(wz, 2),
-              'range_m': round(self._range(), 2), 'airborne': self.airborne,
-              'odom_age_s': None if self.odom_t is None else round(self._now() - self.odom_t, 2),
+              'range_m': None if self._range() is None else round(self._range(), 2), 'airborne': self.airborne,
+              'feedback_error': self.feedback.error(self._now(), self.feedback_lost_s),
+              'lpos_age_s': None if self.feedback.lpos_t is None else round(self._now() - self.feedback.lpos_t, 2),
+              'attitude_age_s': None if self.feedback.att_t is None else round(self._now() - self.feedback.att_t, 2),
+              'state_age_s': None if self.state_t is None else round(self._now() - self.state_t, 2),
               'depth_age_s': None if self.depth_t is None else round(self._now() - self.depth_t, 2),
               'depth_valid_frac': None if self.depth_img is None else round(float((self.depth_img > 0).mean()), 3),
               'policy_ms': round(1e3 * float(np.mean(tm)), 2) if tm else None}

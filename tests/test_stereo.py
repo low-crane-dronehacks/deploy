@@ -11,6 +11,24 @@ from policynav import stereo as S                                              #
 FX, B = 421.0, 0.0757
 
 
+@pytest.mark.parametrize('baseline', [-.075, 0., float('nan'), float('inf')])
+def test_invalid_stereo_geometry_cannot_produce_depth(baseline):
+    with pytest.raises(ValueError, match='baseline'):
+        S.validate_stereo_baseline(baseline)
+
+
+def test_correct_stereo_geometry_is_accepted():
+    S.validate_stereo_baseline(.075)
+
+
+def test_reversed_eyes_fail_rectification_instead_of_making_depth():
+    pytest.importorskip('cv2')
+    K = np.array([[421., 0., 320.], [0., 421., 200.], [0., 0., 1.]])
+    with pytest.raises(ValueError, match='baseline'):
+        S.stereo_rect_from_extrinsics(K, [], K, [], 640, 400, np.eye(3),
+                                     [-.075, 0., 0.], 640, 400)
+
+
 def _P(fx, cx, cy, tx=0.0):
     return [fx, 0, cx, tx, 0, fx, cy, 0, 0, 0, 1, 0]
 

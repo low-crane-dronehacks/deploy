@@ -6,6 +6,7 @@ deterministic policy (Gaussian mean), identical to rsl_rl's ``act_inference`` (c
 from __future__ import annotations
 
 import json
+import warnings
 
 import numpy as np
 
@@ -44,6 +45,15 @@ class NumpyPolicy:
     def __init__(self, path: str):
         z = np.load(path, allow_pickle=False)
         self.meta = json.loads(str(z['meta']))
+        if 'v_obs_scale' not in self.meta:
+            # This repository's legacy and speed-curriculum family used the same
+            # fixed observation scale, even when final action speeds were reduced.
+            warnings.warn('policy metadata missing v_obs_scale; using DroneHacks training scale [5, 3, 2]',
+                          UserWarning, stacklevel=2)
+            self.meta['v_obs_scale'] = [5.0, 3.0, 2.0]
+        scale = np.asarray(self.meta['v_obs_scale'], dtype=float)
+        if scale.shape != (3,) or not np.isfinite(scale).all() or np.any(scale <= 0):
+            raise ValueError('v_obs_scale must contain three finite positive values')
         self.conv = [(z[f'conv{i}_w'], z[f'conv{i}_b'], tuple(z[f'conv{i}_stride']), tuple(z[f'conv{i}_pad']),
                       bool(z[f'conv{i}_pool'])) for i in range(self.meta['n_conv'])]
         self.gru = {k: z['gru_' + k] for k in ('w_ih', 'w_hh', 'b_ih', 'b_hh')}

@@ -122,7 +122,7 @@ int main(int argc, char** argv) {
     for (std::size_t i = 0; i < N; ++i) {
       const QuatWXYZ qi{q[4 * i], q[4 * i + 1], q[4 * i + 2], q[4 * i + 3]};
       std::vector<float> pa(prev.f32() + i * A, prev.f32() + (i + 1) * A);
-      const auto pro = proprio({vel[3 * i], vel[3 * i + 1], vel[3 * i + 2]}, qi, rng[i], pa, meta.v_max);
+      const auto pro = proprio({vel[3 * i], vel[3 * i + 1], vel[3 * i + 2]}, qi, rng[i], pa, meta.v_obs_scale);
       ep = std::max(ep, maxerr(pro.data(), want.f32() + i * P, P));
       const Setpoint sp = action_to_setpoint(act.f32() + i * A, qi, meta.v_max, meta.yaw_rate_max);
       ev = std::max(ev, maxerr(sp.vel_ned.data(), &vsp[3 * i], 3));

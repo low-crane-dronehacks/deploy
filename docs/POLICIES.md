@@ -15,6 +15,10 @@
 `python -m dronehacks.export_policy <ckpt> --out policies/<name>.npz`.
 
 **Observation contract** (`policynav/obs.py`, which must match training):
+- Velocity normalization uses metadata `v_obs_scale`, independently of action limits `v_max`.
+  Missing `v_obs_scale` falls back to `[5, 3, 2]`, the fixed training scale of this repository's
+  legacy/curriculum policy family; Python emits a warning. Explicit scales must have three finite,
+  positive values. New policy families must export their own scale. Both Python and C++ use this rule.
 - Depth is 2 stacked frames, newest first, of z-depth / 5 m. Each frame is a 128x80 pinhole image, 72x50 deg,
   looking along body x.
 - A policy pixel with fewer than 50% valid source pixels is INVALID and reads as near (0.0). An invalid pixel
@@ -28,6 +32,15 @@
 
 **Action:** `[fwd, right, down, yaw_rate]` in [-1, 1], scaled by `v_max`, in the yaw-aligned frame. It is sent
 as a PX4 Offboard TrajectorySetpoint velocity (NED) plus yawspeed, with decisions at 10 Hz.
+On Skybeta, the same action is converted to an ENU twist and sent through the organizer flight interface.
+
+**Skybeta flying policy inputs (PX4 1.16):** fused NED velocity from
+`/fmu/out/vehicle_local_position`, attitude from `/fmu/out/vehicle_attitude` (FRD to NED, w first),
+and valid `VehicleLocalPosition.dist_bottom` for the downward-distance observation. This is PX4's
+estimated bottom distance, not the raw `DistanceSensor.current_distance` sample. There is no altitude
+or constant-value fallback. Raw cuVSLAM odometry is not consumed by the flying policy. Both PX4
+streams must be valid and fresh; resets or invalid feedback during flight latch a hold. See
+[SKYBETA.md](SKYBETA.md) for freshness thresholds and remaining stack dependencies.
 
 **Known gaps** (in training, dronehacks-sim):
 - A see-through net with its frame is in training now (`netbars_*` runs). Taking off from the launch mark is

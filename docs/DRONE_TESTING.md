@@ -106,11 +106,12 @@ Feedback must have `v_xy_valid`, `v_z_valid`, and `heading_good_for_control` tru
 for the organizer's pre-flight checks. Its default topic is `/fmu/out/vehicle_local_position` as observed on
 skybeta-17. If the installed message generation uses a suffix, set
 `px4_feedback_topic:=/fmu/out/vehicle_local_position_v1` after checking the live topic type.
-`target_system` defaults to **17**, matching skybeta-17's `vehicle_status.system_id`; override it on other
-vehicles. System ID and component ID are different fields: the observed status was `system_id: 17`,
-`component_id: 1`. Address the system ID in `target_system`; do not substitute the component ID.
+Both Skybeta launches default `target_system` to **25**, matching skybeta-17's flight controller
+(`MAV_SYS_ID` / `vehicle_status.system_id`); override it on other vehicles. The hostname/drone number
+and `ROS_DOMAIN_ID` remain **17**. Neither is the PX4 system ID. `component_id: 1` is also a separate field.
 Recheck after a firmware/configuration change with
-`ros2 topic echo /fmu/out/vehicle_status_v1 --once --qos-reliability best_effort`.
+`ros2 topic echo /fmu/out/vehicle_status --once --qos-reliability best_effort` on PX4 1.16
+(use the version-suffixed topic only if that is what the live stack publishes).
 A wrong ID lets the interface read state while its mode commands address the wrong aircraft.
 
 The stack's competitor window launches with no arguments, which would only ever give the dry run. Run it by hand:
@@ -127,7 +128,7 @@ cd ~/skybeta && host/run.sh shell
 ros2 launch policynav skybeta_climb_forward.launch.py
 
 # 4. fly (props on, safety pilot on RC, kill switch confirmed, team approval for this flight)
-ros2 launch policynav skybeta_climb_forward.launch.py fly:=true height:=1.0 forward_m:=1.0 target_system:=17
+ros2 launch policynav skybeta_climb_forward.launch.py fly:=true height:=1.0 forward_m:=1.0 target_system:=25
 #    hover only: add forward_m:=0.0 to the same launch (same PX4 feedback and velocity-only code).
 #    Check it without commanding the drone first:
 #    ros2 launch policynav skybeta_climb_forward.launch.py forward_m:=0.0
@@ -151,13 +152,31 @@ restarts.
 
 ```bash
 # by hand (competitor window stopped as in section 5):
-ros2 launch policynav skybeta.launch.py stereo_backend:=vpi policy:=policies/<name>.npz
+ros2 launch policynav skybeta.launch.py stereo_backend:=vpi policy:=policies/<name>.npz target_system:=25
 ```
 
 To have it start with the stack, set these in `/etc/skybeta/drone.env` and restart the stack:
 `COMPETITOR_PKG=policynav` and `COMPETITOR_LAUNCH=skybeta.launch.py`.
 
 Same pilot procedure as section 5. Handheld bench (section 3) first.
+Handheld still uses cuVSLAM state; it does not verify the flying policy's PX4 inputs. Before a
+separately approved policy flight, confirm PX4 `vehicle_local_position` velocity/heading validity
+and positive, valid `dist_bottom`, plus fresh `vehicle_attitude`. The flying policy requires both
+streams within `feedback_lost_s` (default 0.5 s), with no altitude fallback. Confirm `/skybeta/state`
+publishes JSON booleans `armed` and `offboard_active` more frequently than `state_lost_s` (0.5 s).
+`/policynav/status` reports `feedback_error`, `lpos_age_s`, `attitude_age_s`, and `state_age_s`.
+
+For a props-off stereo check, compare the normal handheld launch with `swap_eyes:=true` only if physical
+eye ordering/calibration suggests reversed inputs. This swaps image and camera-info namespaces together.
+Verify a known-distance object on each side of the view; an invalid band on the right alone is not proof
+of swapped eyes. Nonpositive/nonfinite baselines now prevent depth output instead of merely logging a
+warning. No edge fill is enabled. The policy default remains `anneal_slow_b128_3255.npz`.
+
+Check the selected policy's exported `v_obs_scale`: this policy family uses `[5, 3, 2]` despite action
+limits of `[1.2, 0.6, 0.6]`. Missing scale metadata uses `[5, 3, 2]` with a Python warning; malformed scales
+are rejected. Python and C++ now both use the observation scale. Offline verification covers synthetic
+Python/C++ parity, not ROS topic delivery or actual VPI output. Invalid range currently holds the flying
+policy; matching training's lost-range value and camera-rate frame stacking remain follow-up work.
 
 ## 7. Watching it live: Foxglove on your laptop
 

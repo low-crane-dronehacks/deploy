@@ -206,7 +206,7 @@ class PolicyNav(Node):
             else:
                 t0 = time.perf_counter()
                 img = self.stack.push(self.depth_img)
-                pro = O.proprio(self.v.vel, self.v.q, self._range(), self.prev_action, self.meta.get('v_obs_scale', self.v_max))
+                pro = O.proprio(self.v.vel, self.v.q, self._range(), self.prev_action, self.meta['v_obs_scale'])
                 a = np.clip(self.policy(img, pro), -1.0, 1.0)
                 self.prev_action = a.astype(np.float32)
                 self.complete = self.n_act == 5 and a[4] > 0
@@ -220,7 +220,7 @@ class PolicyNav(Node):
             self.policy.reset()
             self.stack.reset()
             img = self.stack.push(self.depth_img)
-            pro = O.proprio(self.v.vel, self.v.q, self._range(), np.zeros(self.n_act), self.meta.get('v_obs_scale', self.v_max))
+            pro = O.proprio(self.v.vel, self.v.q, self._range(), np.zeros(self.n_act), self.meta['v_obs_scale'])
             a = np.clip(self.policy(img, pro), -1.0, 1.0)
             self.timing.append(time.perf_counter() - t0)
             self.dry_action = a

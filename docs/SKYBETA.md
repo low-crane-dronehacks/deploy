@@ -34,8 +34,28 @@ Command reference for building, bench tests and test flights: [DRONE_TESTING.md]
 | `flight_interface` | skybeta's own, started exactly as their `competitor_example` does |
 | `stereo_depth` (`policynav/depth_node.py`) | rectifies the raw pair from the TF extrinsics, because the driver's camera_info is per-eye raw (R = I, D = 0, no common P). Output is 640x400; fx ~420 at alpha 0, the same as our sim and FlyX, with a 74.7 x 51 deg FOV. With `stereo_backend:=sgbm` it also matches (OpenCV SGBM 3-way: 29 ms median on 6 Orin cores with the stack up, measured). Invalid -> NaN -> read as near |
 | `vpi_stereo` (`src/vpi_stereo_node.cpp`, `stereo_backend:=vpi`, the default) | VPI C API, CUDA census + SGM with a confidence threshold on the rectified pair -> `/policynav/depth/image`. Built only if CMake finds VPI (libnvvpi3 + vpi3-dev are in skybeta:0.3.2) |
-| `skybeta_policy` (`policynav/skybeta_node.py`) | zero twists at 10 Hz until `offboard_active`, then the policy at 10 Hz. Caps: `|v|` <= 1.45, yaw <= 0.6 rad/s. Holds on stale odometry/depth, at the time limit, or after touchdown |
+| `skybeta_policy` (`policynav/skybeta_node.py`) | zero twists at 10 Hz until armed + Offboard, then the policy at 10 Hz. PX4 fused velocity/attitude and estimated bottom distance. Caps: `|v|` <= 1.45, yaw from policy metadata unless overridden. Holds on bad PX4 feedback/depth, at the time limit, or after touchdown |
 | `handheld` (with `mode:=handheld`) | camera + policy with odometry state. Publishes no setpoints and does not start the flight interface |
+
+The flying policy reads PX4 1.16's unsuffixed `/fmu/out/vehicle_local_position` for fused NED velocity
+and `dist_bottom`, and `/fmu/out/vehicle_attitude` for the FRD-to-NED quaternion. Velocity is rotated
+into body FRD for the observation; the same quaternion supplies roll/pitch and the heading used to
+rotate actions. It does not subscribe to cuVSLAM odometry. `dist_bottom` is PX4's estimated distance
+to the bottom surface, not a raw rangefinder sample; it must be valid, finite and positive. There is
+no fallback to takeoff-relative altitude or a constant range.
+
+`feedback_lost_s` defaults to 0.5 s for each PX4 stream. Repeated sample timestamps do not refresh
+the watchdog. Invalid velocity/heading, invalid range, invalid attitude, estimator reset counters,
+sample-time reversal or a feedback gap during flight latch a hold, even if valid feedback returns
+before the next decision. `state_lost_s` defaults to 0.5 s; stale interface state, disarming, or
+leaving Offboard stops publications permanently, including from hold. Startup requires fresh PX4
+inputs and depth before running inference. Status reports separate local-position, attitude and
+interface-state ages plus a feedback error.
+
+This does not remove cuVSLAM from the organizer stack: EKF2 may still fuse vision, and `flight_interface`
+still receives its configured cuVSLAM odometry. Handheld mode also still uses cuVSLAM and therefore
+does not validate the flying policy's PX4 observation path. Offline unit tests do not verify live
+PX4 topic delivery, range availability, or the organizer interface's behavior.
 
 ```bash
 # on the drone, once:  git clone https://github.com/low-crane-dronehacks/deploy ~/team_ws/src/deploy
@@ -45,6 +65,12 @@ ros2 launch policynav skybeta.launch.py mode:=handheld      # props OFF first
 ```
 
 ## Runtime and transport (`launch/skybeta.launch.py`)
+`swap_eyes:=true` swaps both image and camera-info namespaces for either stereo backend. Use it only
+after checking physical eye ordering/calibration on the bench; a right-edge invalid band alone does
+not prove the eyes are reversed. Stereo setup rejects nonpositive/nonfinite horizontal or rectified
+baselines instead of continuing with an absolute baseline. The SGBM node fails setup; VPI withholds
+depth while reporting the error. Edge filling is not enabled: invalid policy pixels remain near.
+
 What the launch adds around the nodes, and why. Everything here applies to **our** nodes only (`vpi_stereo`,
 `stereo_depth`, `skybeta_policy`, `handheld`). `flight_interface` keeps skybeta's environment, nice 0, no pinning.
 
@@ -144,8 +170,9 @@ stops publishing permanently. It cannot resume itself.
 
 Dry run is the default (`fly:=false`: wait for valid PX4 feedback, print the plan, publish nothing).
 `px4_feedback_topic` defaults to `/fmu/out/vehicle_local_position` as resolved on skybeta-17; override it
-for a version-suffixed topic when necessary. `target_system` defaults to **17**, the observed PX4 system ID
-on this drone; override on other vehicles. Only the organizer interface sends PX4 commands. Its own
+for a version-suffixed topic when necessary. Both Skybeta launches default `target_system` to **25**,
+the flight controller's `MAV_SYS_ID` / `vehicle_status.system_id`; override on other vehicles.
+The hostname skybeta-17 and ROS domain 17 are separate identifiers. Only the organizer interface sends PX4 commands. Its own
 `odometry_topic` and the organizer EKF2 fusion configuration remain unchanged; the mission does not disable
 vision fusion in PX4. See [DRONE_TESTING.md](DRONE_TESTING.md) for readiness and build steps.
 

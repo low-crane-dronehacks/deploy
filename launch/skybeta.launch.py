@@ -39,11 +39,16 @@ ARGUMENTS = [
     ('mode', 'fly', 'fly | handheld (props off: no flight interface, no setpoints)'),
     ('policy', 'policies/anneal_slow_b128_3255.npz', 'exported policy (.npz), relative to the package share'),
     ('stereo_backend', 'vpi', 'vpi (C++ vpi_stereo, CUDA census+SGM) | sgbm (OpenCV, CPU, ~29 ms at 640x400 on 6 cores)'),
+    ('swap_eyes', 'false', 'swap both stereo image and calibration inputs; verify physical eye ordering on the bench'),
     ('max_disparity', '96', 'stereo search range at 640 px: min range = f*B/max (~0.33 m at 96, 0.40 m at 80)'),
     ('depth_rate_hz', '13.5', 'stereo rate, averaged by camera stamps (training models 13.5-15 Hz frames)'),
     ('speed_cap', '1.45', 'our own cap on |v| (m/s), under the interface clamp'),
     ('yaw_rate_cap', '0.0', 'rad/s; 0 = the policy\'s trained yaw limit (clamping below it is out of distribution); stereo VO dislikes fast spins'),
     ('max_flight_s', '120.0', 'then /skybeta/hold'),
+    ('lpos_topic', '/fmu/out/vehicle_local_position', 'PX4 1.16 fused NED velocity and estimated bottom distance'),
+    ('attitude_topic', '/fmu/out/vehicle_attitude', 'PX4 fused FRD-to-NED attitude'),
+    ('feedback_lost_s', '0.5', 'maximum age of each PX4 policy input stream'),
+    ('state_lost_s', '0.5', 'maximum age of flight_interface state before yielding'),
     ('dds_profile', 'team', 'team (config/fastdds_team.xml: skybeta\'s localhost profile + 8 MiB SHM segment, our '
                             'nodes only) | stack (inherit skybeta\'s profile unchanged)'),
     ('nice', '5', 'niceness of OUR nodes (0 = off): cuVSLAM, the camera driver and flight_interface win contended cores'),
@@ -108,6 +113,12 @@ def nodes(context):
     ours = dict(ONE_BLAS_THREAD, **env)
     prefix = cpu_prefix(context)
     fly = LaunchConfigurationEquals('mode', 'fly')
+    swap = lc('swap_eyes').perform(context).lower()
+    if swap not in ('true', 'false', '1', '0', 'yes', 'no'):
+        raise ValueError('swap_eyes must be true or false')
+    swap = swap in ('true', '1', 'yes')
+    eyes = {'left_ns': '/oak/right' if swap else '/oak/left',
+            'right_ns': '/oak/left' if swap else '/oak/right'}
     flight_interface = Node(
         package='skybeta_flight_interface', executable='flight_interface', name='flight_interface',
         output='screen', emulate_tty=True, condition=fly,
@@ -120,18 +131,20 @@ def nodes(context):
         condition=LaunchConfigurationNotEquals('stereo_backend', 'vpi'),    # vpi: vpi_stereo rectifies + matches in C++
         parameters=[{'backend': PythonExpression(["'external' if '", lc('stereo_backend'), "' == 'vpi' else '",
                                                   lc('stereo_backend'), "'"]),
-                     'max_disparity': lc('max_disparity'), 'rate_hz': lc('depth_rate_hz')}],
+                     'max_disparity': lc('max_disparity'), 'rate_hz': lc('depth_rate_hz'), **eyes}],
     )
     vpi = Node(
         package='policynav', executable='vpi_stereo', name='policynav_vpi_stereo', prefix=prefix, output='screen', emulate_tty=True, additional_env=env,
         condition=LaunchConfigurationEquals('stereo_backend', 'vpi'),
-        parameters=[{'max_disparity': lc('max_disparity'), 'rate_hz': lc('depth_rate_hz')}],
+        parameters=[{'max_disparity': lc('max_disparity'), 'rate_hz': lc('depth_rate_hz'), **eyes}],
     )
     policy = Node(
         package='policynav', executable='skybeta_policy', name='policynav_skybeta', prefix=prefix, output='screen', additional_env=ours,
         emulate_tty=True, condition=fly,
         parameters=[{'policy_file': lc('policy'), 'speed_cap': lc('speed_cap'), 'yaw_rate_cap': lc('yaw_rate_cap'),
-                     'max_flight_s': lc('max_flight_s')}],
+                     'max_flight_s': lc('max_flight_s'), 'lpos_topic': lc('lpos_topic'),
+                     'attitude_topic': lc('attitude_topic'), 'feedback_lost_s': lc('feedback_lost_s'),
+                     'state_lost_s': lc('state_lost_s')}],
     )
     handheld = Node(
         package='policynav', executable='handheld', name='policynav_handheld', prefix=prefix, output='screen', emulate_tty=True, additional_env=ours,

@@ -108,8 +108,8 @@ fresh PX4 yaw-alignment handling remains available when the final-heading flag i
 
 `target_system` defaults to `0` **as a discovery setting only**: the script reads and latches the positive
 `system_id` from live `VehicleStatus` before priming. It never sends a command to system 0. Thus a PX4
-reporting system 1 receives commands addressed to 1; skybeta-17's observed system 17 receives commands
-addressed to 17. An explicit `--ros-args -p target_system:=1` requires the reported ID to be 1, otherwise
+reporting system 1 receives commands addressed to 1; skybeta-17's flight controller system 25 receives commands
+addressed to 25 (the hostname and ROS domain remain 17). An explicit `--ros-args -p target_system:=1` requires the reported ID to be 1, otherwise
 arming is withheld. `component_id: 1` is a different field from `system_id`. Once priming starts, an ID
 change aborts the script instead of redirecting commands. This standalone script writes `/fmu/in/*`
 directly; the organizer Skybeta flight path uses `skybeta_climb_forward.launch.py forward_m:=0.0` instead

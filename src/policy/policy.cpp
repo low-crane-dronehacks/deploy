@@ -85,6 +85,14 @@ PolicyMeta parse_meta(const std::string& s) {
     for (int i = 0; i < 3; ++i) m.v_max[i] = v[i].number();
   }
   m.yaw_rate_max = num("yaw_rate_max", m.yaw_rate_max);
+  if (j.has("v_obs_scale")) {
+    const auto& v = j.at("v_obs_scale").arr;
+    if (v.size() != 3) throw std::runtime_error("policy meta: v_obs_scale must have 3 entries");
+    for (int i = 0; i < 3; ++i) m.v_obs_scale[i] = v[i].number();
+  }
+  for (double v : m.v_obs_scale)
+    if (!std::isfinite(v) || v <= 0)
+      throw std::runtime_error("policy meta: v_obs_scale must be finite and positive");
   m.far_clip = num("far_clip", m.far_clip);
   m.hfov_deg = num("hfov_deg", m.hfov_deg);
   m.vfov_deg = num("vfov_deg", m.vfov_deg);
@@ -301,7 +309,7 @@ PolicyStepper::Result PolicyStepper::step(const std::vector<float>& depth_img, c
   if (m.num_actions < 4) throw std::runtime_error("PolicyStepper: policy has fewer than 4 actions");
   Result res;
   const std::vector<float>& img = stack_.push(depth_img);
-  res.proprio = proprio(vel_ned, q, range_m, prev_action_, m.v_max);
+  res.proprio = proprio(vel_ned, q, range_m, prev_action_, m.v_obs_scale);
   res.action = policy_(img, res.proprio);
   for (float& a : res.action) a = std::max(-1.0f, std::min(1.0f, a));
   prev_action_ = res.action;

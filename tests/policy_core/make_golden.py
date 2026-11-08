@@ -128,8 +128,9 @@ def main(policy_path, out_path, *depth_files):
     prev = rng.uniform(-1.2, 1.2, (N, n_act)).astype(np.float32)
     act = rng.uniform(-1.5, 1.5, (N, n_act)).astype(np.float32)
     v_max = meta['v_max']
+    v_obs_scale = meta['v_obs_scale']
     G['pp_q'], G['pp_vel'], G['pp_range'], G['pp_prev'], G['pp_act'] = quats, vel, rngm, prev, act
-    G['pp_proprio'] = np.stack([O.proprio(vel[i], quats[i], rngm[i], prev[i], v_max) for i in range(N)])
+    G['pp_proprio'] = np.stack([O.proprio(vel[i], quats[i], rngm[i], prev[i], v_obs_scale) for i in range(N)])
     sps = [O.action_to_setpoint(act[i, :4], quats[i], v_max, meta['yaw_rate_max']) for i in range(N)]
     G['pp_vel_sp'] = np.stack([s[0] for s in sps])
     G['pp_yawspeed'] = np.array([s[1] for s in sps])
@@ -166,7 +167,7 @@ def main(policy_path, out_path, *depth_files):
         if k in resets:
             pol.reset(); stack.reset(); prev_action[:] = 0.0
         img = stack.push(reproj[0, seq_f[k]])
-        pro = O.proprio(seq_vel[k], seq_q[k], seq_rng[k], prev_action, v_max)
+        pro = O.proprio(seq_vel[k], seq_q[k], seq_rng[k], prev_action, v_obs_scale)
         a = np.clip(pol(img, pro), -1.0, 1.0).astype(np.float32)
         prev_action = a
         vel_sp, yawspeed = O.action_to_setpoint(a[:4], seq_q[k], v_max, meta['yaw_rate_max'])
@@ -190,7 +191,7 @@ def main(policy_path, out_path, *depth_files):
 
     def full_step():
         img = stack.push(reproj[0, 0])
-        pro = O.proprio(seq_vel[0], seq_q[0], 1.0, prev_action, v_max)
+        pro = O.proprio(seq_vel[0], seq_q[0], 1.0, prev_action, v_obs_scale)
         a = np.clip(pol(img, pro), -1.0, 1.0).astype(np.float32)
         O.action_to_setpoint(a[:4], seq_q[0], v_max, meta['yaw_rate_max'])
     G['py_ms_step'] = np.float64(med(full_step))

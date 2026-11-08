@@ -43,6 +43,13 @@ def rect_baseline_m(P_right) -> float:
     return float(-P[0, 3] / P[0, 0])
 
 
+def validate_stereo_baseline(baseline_m):
+    """Positive-disparity matching requires the right eye to be physically right."""
+    if not np.isfinite(baseline_m) or baseline_m <= 0:
+        raise ValueError('invalid stereo baseline: check calibration and left/right eye ordering; '
+                         'no depth will be published')
+
+
 def rectified_intrinsics(P_left, src_w, src_h, out_w, out_h):
     """(fx, fy, cx, cy) of the rectified LEFT image at the output resolution."""
     P = _as(P_left, (3, 4))
@@ -80,6 +87,7 @@ def stereo_rect_from_extrinsics(K1, D1, K2, D2, src_w, src_h, R_lr, t_lr, out_w,
     Output is out_w x out_h directly (the matching resolution). R1 rotates left-camera points into the rectified
     frame (x_rect = R1 x_left)."""
     import cv2
+    validate_stereo_baseline(t_lr[0])
     K1, K2 = _as(K1, (3, 3)), _as(K2, (3, 3))
     D1 = np.asarray(D1, np.float64).ravel()[:8] if len(D1) else np.zeros(5)
     D2 = np.asarray(D2, np.float64).ravel()[:8] if len(D2) else np.zeros(5)

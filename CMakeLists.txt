@@ -54,6 +54,10 @@ target_link_libraries(policy_core_golden_test policynav_core)
 install(TARGETS policy_core_decision_gate_test policy_core_golden_test DESTINATION lib/${PROJECT_NAME})
 if(BUILD_TESTING)
   enable_testing()
+  add_executable(policy_core_velocity_scale_test tests/policy_core/velocity_scale_test.cpp)
+  target_link_libraries(policy_core_velocity_scale_test policynav_core)
+  add_test(NAME policy_core_velocity_scale COMMAND policy_core_velocity_scale_test
+    ${CMAKE_CURRENT_SOURCE_DIR}/policies/anneal_slow_b128_3255.npz)
   add_test(NAME policy_core_decision_gate COMMAND policy_core_decision_gate_test)
 endif()
 
