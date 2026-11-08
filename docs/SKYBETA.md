@@ -60,7 +60,9 @@ estimator resets, sample-time reversal or a feedback gap during flight latch a h
 flags stop cache updates; range dropouts alone do not hold once a distance has been accepted.
 `state_lost_s` defaults to 0.5 s; stale interface state, disarming, or leaving Offboard stops publications
 permanently, including from hold. Startup requires fresh PX4 inputs and depth. Before Offboard,
-`POLICY START BLOCKED` errors repeat every 5 s with the blocking input; status also reports
+`POLICY START BLOCKED` errors repeat every 5 s with the blocking input. When feedback, depth and
+interface state are ready, a bold bright-green `POLICY INPUTS READY` message repeats every 5 s while
+waiting for pilot Offboard. This indicates input readiness, not flight approval. Status also reports
 `feedback_error`, `heading_source`, `estimator_age_s`, and the other stream ages.
 
 This does not remove cuVSLAM from the organizer stack: EKF2 may still fuse vision, and `flight_interface`

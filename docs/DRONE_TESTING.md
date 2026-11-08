@@ -211,26 +211,24 @@ landing and disarm. It records PX4 feedback, commanded motion, policy status/dep
 It does not arm or send flight commands.
 
 ```bash
-# On the drone host: enter a separate shell in the running stack.
-cd ~/skybeta && host/run.sh shell
-
-# Inside that shell:
+# Paste this whole command on the drone HOST (dronehacks@skybeta-17), not inside the container.
+docker exec -it -e ROS_DOMAIN_ID=25 skybeta-stack bash -c '
+set -e
 source /opt/ros/humble/setup.bash
 source /root/skybeta_ws/install/setup.bash
 source /root/team_ws/install/setup.bash
-export ROS_DOMAIN_ID=25
 mkdir -p /root/team_ws/logs/bags
 FLIGHT_BAG="/root/team_ws/logs/bags/flight_$(date -u +%Y%m%dT%H%M%SZ)"
-ros2 bag record -o "$FLIGHT_BAG" \
+echo "Recording to $FLIGHT_BAG"
+exec ros2 bag record -o "$FLIGHT_BAG" \
   /fmu/out/vehicle_local_position \
-  /fmu/out/vehicle_attitude \
-  /fmu/out/estimator_status_flags \
-  /fmu/out/vehicle_status_v1 \
-  /fmu/out/vehicle_land_detected \
-  /skybeta/state /skybeta/setpoint/twist \
+  /fmu/out/vehicle_attitude /fmu/out/estimator_status_flags \
+  /fmu/out/vehicle_status_v1 /fmu/out/vehicle_land_detected \
+  /skybeta/state /skybeta/setpoint/twist /skybeta/setpoint/pose \
   /policynav/status /policynav/depth/image /policynav/depth/camera_info \
   /visual_slam/tracking/odometry /visual_slam/status \
   /tf /tf_static
+'
 ```
 
 Wait for the recorder to subscribe to the expected live topics before arming. The names above target
@@ -238,10 +236,12 @@ PX4 1.16; check `ros2 topic list` if a topic is missing. The scripted forward fl
 start policy/depth publishers, so those topics may be absent for that test.
 
 After landing, press **Ctrl-C once** in the recording terminal and wait for the recorder to exit so it
-finishes writing the bag. Then, in the same shell:
+finishes writing the bag and returns to the host shell. To inspect it, replace the timestamp below
+with the path printed when recording started (the variable existed only inside the container command):
 
 ```bash
-ros2 bag info "$FLIGHT_BAG"
+docker exec -it skybeta-stack bash -c 'source /opt/ros/humble/setup.bash && ros2 bag info "$1"' _ \
+  /root/team_ws/logs/bags/flight_REPLACE_WITH_TIMESTAMP
 ```
 
 Check the listed topics and message counts. The bag directory contains `metadata.yaml` and the storage

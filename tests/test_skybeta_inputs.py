@@ -147,3 +147,24 @@ def test_no_initial_range_logs_error_before_offboard_and_blocks_inference(node):
     node.state['armed'] = True
     node._tick()
     assert node.phase == 'hold' and not node.steps
+
+
+@pytest.mark.parametrize('missing', [None, 'depth', 'state', 'range'])
+def test_green_readiness_requires_all_startup_inputs(node, missing):
+    node.phase = 'wait'
+    node.state['armed'] = False
+    messages = []
+    node.get_logger = lambda: Msg(info=lambda text, **kw: messages.append(text),
+                                 error=lambda *a, **kw: None)
+    if missing == 'depth':
+        node.depth_t = None
+    elif missing == 'state':
+        node.state_t = None
+    elif missing == 'range':
+        node.feedback.range_t = None
+    node._tick()
+    green = [m for m in messages if '\033[1;92m' in m]
+    assert bool(green) == (missing is None)
+    if green:
+        assert green[0].endswith('\033[0m')
+    assert not node.steps

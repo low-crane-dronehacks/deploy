@@ -184,12 +184,16 @@ class Skybeta(Node):
         feedback_error = self.feedback.error(t, self.feedback_lost_s)
         if self.phase == 'wait':
             blocker = feedback_error
+            if blocker is None and not state_fresh:
+                blocker = 'flight interface state missing or stale'
             if blocker is None and (self.depth_t is None or not 0 <= t - self.depth_t <= self.depth_stale_s):
                 blocker = 'depth missing or stale'
             if blocker:
                 self.get_logger().error(f'POLICY START BLOCKED: {blocker}', throttle_duration_sec=5.0)
-            elif self.last_startup_blocker:
-                self.get_logger().info('Policy sensor inputs ready; waiting for pilot Offboard')
+            else:
+                self.get_logger().info(
+                    '\033[1;92mPOLICY INPUTS READY: all startup checks pass; waiting for pilot Offboard\033[0m',
+                    throttle_duration_sec=5.0)
             self.last_startup_blocker = blocker
         if self.phase == 'wait' and offboard:
             if feedback_error or self.depth_t is None or not 0 <= t - self.depth_t <= self.depth_stale_s:
