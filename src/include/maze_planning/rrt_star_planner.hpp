@@ -24,7 +24,7 @@ struct RRTStarConfig {
   double robot_radius_m{0.21};           // collision inflation radius (m)
   double comfort_clearance_m{0.46};      // medial-axis comfort clearance (m)
   double comfort_weight{4.2};            // clearance penalty weight in edge cost
-  double cruise_speed_m_s{2.60};         // nominal speed along smoothed B-spline path
+  double cruise_speed_m_s{1.50};         // nominal speed along smoothed B-spline path (flight_interface clamp)
   double bspline_dt_s{0.05};             // dense path discretization interval (20 Hz)
   Eigen::Vector3d bounds_min_ned{-2.86, -2.86, -1.60};
   Eigen::Vector3d bounds_max_ned{2.86, 2.86, -0.22};
@@ -61,7 +61,7 @@ class RRTStarPlanner {
 
   /**
    * @brief Plan a collision-free, clearance-optimized path between start_map and goal_map
-   * on the GroundTruthMap encoding, smoothed with a clamped cubic B-spline (/plan/global_rrt).
+   * on the GroundTruthMap encoding, smoothed with a clamped cubic B-spline (/plan/global_path).
    *
    * Returns false when the tree never connected to goal_map. out_path / out_raw_waypoints then hold the
    * best partial path (towards the node closest to the goal) for debugging only: do not fly it.

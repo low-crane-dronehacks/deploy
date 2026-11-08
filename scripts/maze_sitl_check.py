@@ -8,7 +8,7 @@
 
 Checks (stage 0, arm:=false):
   odometry   /odometry/local from the PX4 adapter, rate
-  plan       /plan/global_rrt received (poses, length), /plan/local_reference rate
+  plan       /plan/global_path received (poses, length), /plan/local_reference rate
   MPPI       /control/trajectory_setpoint rate (~50 Hz) and its velocity
   PX4 input  /fmu/in/{trajectory_setpoint, offboard_control_mode, vehicle_command} SILENT (arm:=false forwards nothing)
   PX4 state  disarmed
@@ -110,7 +110,7 @@ def main(argv=None):
         st['nav'] = m.nav_state
 
     node.create_subscription(Odometry, '/odometry/local', lambda m: hit('odom'), qos_profile_sensor_data)
-    node.create_subscription(PathMsg, '/plan/global_rrt', on_plan, latched)
+    node.create_subscription(PathMsg, '/plan/global_path', on_plan, latched)
     node.create_subscription(PathMsg, '/plan/local_reference', lambda m: hit('local_ref'), 10)
     node.create_subscription(TrajectorySetpoint, '/control/trajectory_setpoint', on_sp, px4_qos)
     node.create_subscription(TwistStamped, '/control/cmd_vel', lambda m: hit('cmd_vel'), 10)
@@ -152,10 +152,10 @@ def main(argv=None):
         p = st['plan']
         if p is not None and len(p.poses) > 1:
             xy = np.array([[q.pose.position.x, q.pose.position.y, q.pose.position.z] for q in p.poses])
-            check('plan', True, f"/plan/global_rrt {len(p.poses)} poses, {np.sum(np.linalg.norm(np.diff(xy, axis=0), axis=1)):.1f} m, "
+            check('plan', True, f"/plan/global_path {len(p.poses)} poses, {np.sum(np.linalg.norm(np.diff(xy, axis=0), axis=1)):.1f} m, "
                                 f"frame {p.header.frame_id}; local reference {rate('local_ref'):.0f} Hz")
         else:
-            check('plan', False, '/plan/global_rrt not received')
+            check('plan', False, '/plan/global_path not received')
         sp = st['sp']
         vtxt = '' if sp is None else '  v = (' + ', '.join(f'{c:+.2f}' for c in sp.velocity) + ') NED'
         check('MPPI', rate('sp') > 30, f"/control/trajectory_setpoint {rate('sp'):.0f} Hz{vtxt}")

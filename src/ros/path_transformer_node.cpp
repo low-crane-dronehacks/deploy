@@ -1,9 +1,9 @@
 // path_transformer_node: Standalone ROS 2 Path Transformer node (WP-3 Task 2).
-// Subscribes to /plan/global_rrt (map frame), /odometry/local (odom frame), and TF map -> odom;
+// Subscribes to /plan/global_path (map frame), /odometry/local (odom frame), and TF map -> odom;
 // publishes /plan/local_reference (20 Hz, nav_msgs/Path in odom frame) and
 // /plan/rl_lookaheads (50 Hz, std_msgs/Float32MultiArray: 4 lookaheads at d=[0.5, 1.0, 2.0, 3.5]m in body frame B).
 //
-// /plan/global_rrt is latched (transient_local) and only sent on a new plan. Its pose stamps carry the timing
+// /plan/global_path is latched (transient_local) and only sent on a new plan. Its pose stamps carry the timing
 // (ros_conversions.hpp); /plan/local_reference keeps that timing (pose stamps relative to its header stamp).
 // It consumes any planner that follows that contract, not only rrt_star_planner_node.
 #include <array>
@@ -33,14 +33,14 @@ class PathTransformerNode : public rclcpp::Node {
         tf_listener_(tf_buffer_) {
     map_frame_ = declare_parameter<std::string>("map_frame", "map_ned");
     odom_frame_ = declare_parameter<std::string>("odom_frame", "odom_ned");
-    cruise_speed_m_s_ = declare_parameter<double>("cruise_speed_m_s", 2.60);
+    cruise_speed_m_s_ = declare_parameter<double>("cruise_speed_m_s", 1.50);
 
     pub_local_ref_ = create_publisher<nav_msgs::msg::Path>("/plan/local_reference", 10);
     pub_rl_lookaheads_ =
         create_publisher<std_msgs::msg::Float32MultiArray>("/plan/rl_lookaheads", 10);
 
     sub_global_ = create_subscription<nav_msgs::msg::Path>(
-        "/plan/global_rrt", rclcpp::QoS(1).reliable().transient_local(),
+        "/plan/global_path", rclcpp::QoS(1).reliable().transient_local(),
         [this](const nav_msgs::msg::Path::SharedPtr m) { onGlobalPath(*m); });
     sub_odom_ = create_subscription<nav_msgs::msg::Odometry>(
         "/odometry/local", rclcpp::SensorDataQoS(),
@@ -101,7 +101,7 @@ class PathTransformerNode : public rclcpp::Node {
   tf2_ros::TransformListener tf_listener_;
   std::string map_frame_{"map"};
   std::string odom_frame_{"odom"};
-  double cruise_speed_m_s_{2.60};
+  double cruise_speed_m_s_{1.50};
 
   PathTransformer transformer_;
   VehicleKinematics state_odom_{};

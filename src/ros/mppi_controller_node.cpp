@@ -1,4 +1,5 @@
-// mppi_controller_node: 2048-rollout MPPI controller + STVL voxel costmap (Section 2.2, 2.3, WP-3 Tasks 3-4).
+// mppi_controller_node: MPPI controller (rollouts through the quad.py plant) + STVL voxel costmap (Section 2.2,
+// 2.3, WP-3 Tasks 3-4).
 //
 // in   /plan/local_reference          nav_msgs/Path (odom frame, timed pose stamps) from path_transformer_node
 //      /odometry/local                nav_msgs/Odometry (odom frame)
@@ -12,7 +13,8 @@
 //      /control/cmd_vel               geometry_msgs/TwistStamped (NED velocity + yaw rate; debug / sim_loopback)
 //      /costmap/local_voxels          nav_msgs/OccupancyGrid (map frame) slice at the vehicle height
 //      /viz/mppi_candidates           visualization_msgs/MarkerArray (odom frame): sampled rollouts coloured
-//                                     by cost (green = cheap, red = expensive) + the optimal rollout (blue)
+//                                     by cost (green = cheap, red = expensive) + the optimal rollout (blue) + the
+//                                     heading the plant predicts along it (orange arrows, ns mppi_heading)
 //      /plan/replan_blocked_corridor  geometry_msgs/PointStamped (map frame) on FMEA Pillar Dead-Center
 //
 // This node only controls. It does not simulate the vehicle or broadcast TF: sim_loopback_node does that for
@@ -82,7 +84,7 @@ class MPPIControllerNode : public rclcpp::Node {
         declare_parameter<std::string>("groundtruth_map_path", "config/course_groundtruth.bin");
     const std::string obj_path =
         declare_parameter<std::string>("course_obj_path", "sitl/world/course.obj");
-    cruise_speed_m_s_ = declare_parameter<double>("cruise_speed_m_s", 2.60);
+    cruise_speed_m_s_ = declare_parameter<double>("cruise_speed_m_s", 1.50);
     const bool inject_demo_pillar = declare_parameter<bool>("inject_demo_pillar", false);
     map_frame_ = declare_parameter<std::string>("map_frame", "map_ned");
     odom_frame_ = declare_parameter<std::string>("odom_frame", "odom_ned");
@@ -108,10 +110,15 @@ class MPPIControllerNode : public rclcpp::Node {
     }
 
     MPPIConfig mcfg{};
-    mcfg.num_samples = static_cast<int>(declare_parameter<int64_t>("mppi_num_samples", 2048));
+    mcfg.num_samples = static_cast<int>(declare_parameter<int64_t>("mppi_num_samples", 1024));
     mcfg.horizon_steps = static_cast<int>(declare_parameter<int64_t>("mppi_horizon_steps", 16));
     mcfg.viz_num_candidates = static_cast<int>(declare_parameter<int64_t>("viz_num_candidates", 64));
-    MultirotorPlantParams plant{};
+    // Heading critics (see MPPIConfig): orientation = heading toward the path tangent, fov = horizontal motion
+    // must stay within fov_half_angle of the heading (the depth camera looks along body x).
+    mcfg.w_orientation = declare_parameter<double>("mppi_w_orientation", mcfg.w_orientation);
+    mcfg.w_fov = declare_parameter<double>("mppi_w_fov", mcfg.w_fov);
+    mcfg.fov_half_angle_rad = declare_parameter<double>("mppi_fov_half_angle_rad", mcfg.fov_half_angle_rad);
+    QuadPlantParams plant{};
     mppi_ = std::make_shared<MPPIController>(mcfg, plant, costmap_);
 
     pub_costmap_ = create_publisher<nav_msgs::msg::OccupancyGrid>("/costmap/local_voxels", 10);
@@ -264,6 +271,31 @@ class MPPIControllerNode : public rclcpp::Node {
     opt.color.a = 1.0f;
     for (const auto& p : mppi_->lastOptimalRollout()) opt.points.push_back(toPoint(p));
     arr.markers.push_back(std::move(opt));
+
+    // Predicted heading (body x) along the optimal rollout: compare with the rollout's direction of travel.
+    const auto& pos = mppi_->lastOptimalRollout();
+    const auto& yaw = mppi_->lastOptimalRolloutYaw();
+    for (std::size_t i = 0; i < pos.size() && i < yaw.size(); i += 4) {
+      visualization_msgs::msg::Marker h;
+      h.header.stamp = stamp;
+      h.header.frame_id = odom_frame_;
+      h.ns = "mppi_heading";
+      h.id = static_cast<int>(i);
+      h.type = visualization_msgs::msg::Marker::ARROW;
+      h.action = visualization_msgs::msg::Marker::ADD;
+      h.pose.orientation.w = 1.0;
+      h.scale.x = 0.015;   // shaft diameter
+      h.scale.y = 0.04;    // head diameter
+      h.scale.z = 0.05;    // head length
+      h.lifetime = rclcpp::Duration::from_seconds(0.5);
+      h.color.r = 1.0f;
+      h.color.g = 0.55f;
+      h.color.b = 0.0f;
+      h.color.a = 1.0f;
+      h.points.push_back(toPoint(pos[i]));
+      h.points.push_back(toPoint(pos[i] + 0.25 * Eigen::Vector3d(std::cos(yaw[i]), std::sin(yaw[i]), 0.0)));
+      arr.markers.push_back(std::move(h));
+    }
     pub_candidates_->publish(arr);
   }
 
@@ -320,7 +352,7 @@ class MPPIControllerNode : public rclcpp::Node {
   tf2_ros::TransformListener tf_listener_;
   std::string map_frame_;
   std::string odom_frame_;
-  double cruise_speed_m_s_{2.60};
+  double cruise_speed_m_s_{1.50};
   int64_t viz_every_n_{5};
   int64_t tick_{0};
 

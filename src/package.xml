@@ -2,7 +2,7 @@
 <package format="3">
   <name>isam2_depth</name>
   <version>0.2.0</version>
-  <description>iSAM2 factor graph, GroundTruthMap, Informed RRT* global planner, PathTransformer, STVL VoxelCostmap, 2048-rollout MPPI local controller, and Control Mode Multiplexer.</description>
+  <description>iSAM2 factor graph, GroundTruthMap, Informed RRT* global planner, PathTransformer, STVL VoxelCostmap, MPPI local controller (rollouts through a C++ port of dronehacks-sim quad.py), and Control Mode Multiplexer.</description>
   <maintainer email="noreply@example.com">dronehacks</maintainer>
   <license>TODO</license>
 

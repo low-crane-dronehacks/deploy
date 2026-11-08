@@ -4,7 +4,7 @@
 //      /plan/replan_blocked_corridor     geometry_msgs/PointStamped (map frame) from MPPI / supervisor:
 //                                        mark the corridor blocked and replan (FMEA Pillar Dead-Center)
 //      TF map -> odom                    (identity with a warning if missing)
-// out  /plan/global_rrt                  nav_msgs/Path, map frame, transient_local (latched). Published once
+// out  /plan/global_path                  nav_msgs/Path, map frame, transient_local (latched). Published once
 //                                        per new plan, never re-sent on a timer: a consumer that sees a new
 //                                        message knows it is a new plan starting at the vehicle.
 //                                        Pose stamps carry the timing (ros_conversions.hpp).
@@ -15,7 +15,7 @@
 // The initial plan starts at the launch mark at cruise height (the vehicle is still on the ground).
 //
 // Swapping in another global planner: replace this node with anything that publishes the same
-// /plan/global_rrt contract (docs/AUTONOMY_ARCHITECTURE.md, "Global planner contract").
+// /plan/global_path contract (docs/AUTONOMY_ARCHITECTURE.md, "Global planner contract").
 #include <chrono>
 #include <cmath>
 #include <memory>
@@ -66,12 +66,12 @@ class RRTStarPlannerNode : public rclcpp::Node {
     }
 
     RRTStarConfig rcfg{};
-    rcfg.cruise_speed_m_s = declare_parameter<double>("cruise_speed_m_s", 2.60);
+    rcfg.cruise_speed_m_s = declare_parameter<double>("cruise_speed_m_s", 1.50);
     rcfg.max_iterations = static_cast<int>(declare_parameter<int64_t>("rrt_max_iterations", 1200));
     rrt_planner_ = std::make_unique<RRTStarPlanner>(rcfg, gt_map_);
 
     const rclcpp::QoS latched = rclcpp::QoS(1).reliable().transient_local();
-    pub_global_rrt_ = create_publisher<nav_msgs::msg::Path>("/plan/global_rrt", latched);
+    pub_global_path_ = create_publisher<nav_msgs::msg::Path>("/plan/global_path", latched);
     pub_map_cloud_ = create_publisher<sensor_msgs::msg::PointCloud2>("/viz/groundtruth_map_cloud", latched);
     publishGroundTruthCloud();
 
@@ -105,7 +105,7 @@ class RRTStarPlannerNode : public rclcpp::Node {
     }
     global_path_map_ = std::move(candidate);
     progress_.reset(global_path_map_, std::move(anchor_s), first);
-    pub_global_rrt_->publish(ros_conv::toRosPath(global_path_map_, map_frame_, now()));
+    pub_global_path_->publish(ros_conv::toRosPath(global_path_map_, map_frame_, now()));
     RCLCPP_INFO(get_logger(), "%s: from [%.2f, %.2f, %.2f] via anchor #%zu.. -> pad, len=%.2fm", why,
                 current_pos_map_.x(), current_pos_map_.y(), current_pos_map_.z(), first,
                 global_path_map_.total_length_m);
@@ -182,7 +182,7 @@ class RRTStarPlannerNode : public rclcpp::Node {
   Eigen::Vector3d current_pos_map_{Eigen::Vector3d::Zero()};
   double last_replan_s_{-1e9};
 
-  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_global_rrt_;
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_global_path_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_map_cloud_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_odom_;
   rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr sub_replan_;

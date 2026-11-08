@@ -17,7 +17,7 @@ struct PathTransformerConfig {
  * @brief Path Transformer (Section 2.2, 2.3, 4.1, WP-3 Task 2, Section 6 FMEA).
  *
  * Responsibilities:
- *   1. Ingests the global RRT* path (/plan/global_rrt) in the `map` frame and the latest
+ *   1. Ingests the global path (/plan/global_path) in the `map` frame and the latest
  *      `map -> odom` transform T_map_odom (broadcast by iSAM2 at 20 Hz).
  *   2. Transforms the sliding lookahead window of the RRT* path into the continuous,
  *      jump-free `odom` frame (`T_odom_map = T_map_odom.inverse()`) and outputs `/plan/local_reference`
@@ -32,7 +32,7 @@ class PathTransformer {
   explicit PathTransformer(const PathTransformerConfig& cfg = PathTransformerConfig{});
 
   /**
-   * @brief Update the global RRT* path in the `map` frame (/plan/global_rrt).
+   * @brief Update the global path in the `map` frame (/plan/global_path).
    */
   void setGlobalPathMap(const PlannedPath& path_map);
 

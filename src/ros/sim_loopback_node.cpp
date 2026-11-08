@@ -1,4 +1,6 @@
-// sim_loopback_node: kinematic stand-in for the vehicle, for the standalone RViz demo (no Gazebo, no PX4).
+// sim_loopback_node: stand-in for the vehicle, for the standalone RViz demo (no Gazebo, no PX4). It steps the same
+// plant MPPI rolls out (QuadPlant, the C++ port of dronehacks-sim quad.py: Lee velocity controller, deadcat rotors,
+// motor lag, drag), so the demo shows real attitude, lag and yaw-rate limits instead of an ideal velocity source.
 //
 // in   /control/cmd_vel    geometry_msgs/TwistStamped (NED velocity + yaw rate) from mppi_controller_node
 // out  /odometry/local     nav_msgs/Odometry (odom frame; twist in the body frame per REP-105)
@@ -24,17 +26,20 @@
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 
+#include "maze_planning/quad_plant.hpp"
+
 class SimLoopbackNode : public rclcpp::Node {
  public:
   SimLoopbackNode() : Node("sim_loopback_node"), tf_broadcaster_(this) {
     map_frame_ = declare_parameter<std::string>("map_frame", "map_ned");
     odom_frame_ = declare_parameter<std::string>("odom_frame", "odom_ned");
     base_frame_ = declare_parameter<std::string>("base_frame", "base_link_frd");
-    pos_ = Eigen::Vector3d(declare_parameter<double>("start_x", 0.9144),
-                           declare_parameter<double>("start_y", -2.5146),
-                           declare_parameter<double>("start_z", -0.78));
-    yaw_ = declare_parameter<double>("start_yaw", 0.0);
-    vel_response_ = declare_parameter<double>("velocity_response", 0.20);   // per 20 ms step
+    const Eigen::Vector3d start(declare_parameter<double>("start_x", 0.9144),
+                                declare_parameter<double>("start_y", -2.5146),
+                                declare_parameter<double>("start_z", -0.78));
+    const double start_yaw = declare_parameter<double>("start_yaw", 0.0);
+    state_ = plant_.fromNed(start, Eigen::Vector3d::Zero(),
+                            Eigen::Quaterniond(Eigen::AngleAxisd(start_yaw, Eigen::Vector3d::UnitZ())));
     cmd_timeout_s_ = declare_parameter<double>("cmd_timeout_s", 0.3);
 
     pub_odom_ = create_publisher<nav_msgs::msg::Odometry>("/odometry/local", rclcpp::SensorDataQoS());
@@ -53,28 +58,31 @@ class SimLoopbackNode : public rclcpp::Node {
   void step(double dt) {
     const bool fresh = (now().seconds() - last_cmd_s_) < cmd_timeout_s_;
     const Eigen::Vector3d v_cmd = fresh ? cmd_vel_ : Eigen::Vector3d::Zero();
-    vel_ = (1.0 - vel_response_) * vel_ + vel_response_ * v_cmd;
-    pos_ += vel_ * dt;
-    yaw_ = std::remainder(yaw_ + (fresh ? cmd_yawspeed_ : 0.0) * dt, 2.0 * M_PI);
-    const Eigen::Quaterniond q(Eigen::AngleAxisd(yaw_, Eigen::Vector3d::UnitZ()));
+    plant_.stepWorld(state_, v_cmd, fresh ? cmd_yawspeed_ : 0.0, dt);
+    const Eigen::Vector3d pos = state_.posNed();
+    const Eigen::Vector3d vel = state_.velNed();
+    const Eigen::Quaterniond q(state_.rotNed());   // body FRD -> NED
     const rclcpp::Time stamp = now();
 
     nav_msgs::msg::Odometry o;
     o.header.stamp = stamp;
     o.header.frame_id = odom_frame_;
     o.child_frame_id = base_frame_;
-    o.pose.pose.position.x = pos_.x();
-    o.pose.pose.position.y = pos_.y();
-    o.pose.pose.position.z = pos_.z();
+    o.pose.pose.position.x = pos.x();
+    o.pose.pose.position.y = pos.y();
+    o.pose.pose.position.z = pos.z();
     o.pose.pose.orientation.w = q.w();
     o.pose.pose.orientation.x = q.x();
     o.pose.pose.orientation.y = q.y();
     o.pose.pose.orientation.z = q.z();
-    const Eigen::Vector3d v_body = q.conjugate() * vel_;
+    const Eigen::Vector3d v_body = q.conjugate() * vel;
     o.twist.twist.linear.x = v_body.x();
     o.twist.twist.linear.y = v_body.y();
     o.twist.twist.linear.z = v_body.z();
-    o.twist.twist.angular.z = fresh ? cmd_yawspeed_ : 0.0;
+    const Eigen::Vector3d w_frd(state_.omega_b.x(), -state_.omega_b.y(), -state_.omega_b.z());   // FLU -> FRD
+    o.twist.twist.angular.x = w_frd.x();
+    o.twist.twist.angular.y = w_frd.y();
+    o.twist.twist.angular.z = w_frd.z();
     pub_odom_->publish(o);
 
     geometry_msgs::msg::PoseStamped ps;
@@ -91,19 +99,17 @@ class SimLoopbackNode : public rclcpp::Node {
     odom_base.header.stamp = stamp;
     odom_base.header.frame_id = odom_frame_;
     odom_base.child_frame_id = base_frame_;
-    odom_base.transform.translation.x = pos_.x();
-    odom_base.transform.translation.y = pos_.y();
-    odom_base.transform.translation.z = pos_.z();
+    odom_base.transform.translation.x = pos.x();
+    odom_base.transform.translation.y = pos.y();
+    odom_base.transform.translation.z = pos.z();
     odom_base.transform.rotation = o.pose.pose.orientation;
     tf_broadcaster_.sendTransform(std::vector<geometry_msgs::msg::TransformStamped>{map_odom, odom_base});
   }
 
   tf2_ros::TransformBroadcaster tf_broadcaster_;
   std::string map_frame_, odom_frame_, base_frame_;
-  Eigen::Vector3d pos_{Eigen::Vector3d::Zero()};
-  Eigen::Vector3d vel_{Eigen::Vector3d::Zero()};
-  double yaw_{0.0};
-  double vel_response_{0.2};
+  maze_planning::QuadPlant plant_;
+  maze_planning::QuadState state_;
   double cmd_timeout_s_{0.3};
   Eigen::Vector3d cmd_vel_{Eigen::Vector3d::Zero()};
   double cmd_yawspeed_{0.0};

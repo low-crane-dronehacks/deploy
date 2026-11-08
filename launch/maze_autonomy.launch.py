@@ -7,8 +7,8 @@ Decoupled ROS 2 nodes (Section 2.2, 2.3, WP-3, WP-4); each talks to the others o
     estimator such as iSAM2 / the merged stack (map_odom_source:=external)
   - isam2_depth_node (isam2:=true; needs GTSAM + px4_msgs): ~/obstacles -> MPPI's local distance grid
   - global planner (planner:=astar | rrt_star): astar_planner_node (grid A* through the arena_prior.json
-    checkpoints) or rrt_star_planner_node -> /plan/global_rrt (latched, timed, on each new plan)
-  - path_transformer_node: /plan/global_rrt + TF map->odom -> /plan/local_reference (20 Hz),
+    checkpoints) or rrt_star_planner_node -> /plan/global_path (latched, timed, on each new plan)
+  - path_transformer_node: /plan/global_path + TF map->odom -> /plan/local_reference (20 Hz),
     /plan/rl_lookaheads (50 Hz)
   - mppi_controller_node: /plan/local_reference + obstacle clouds -> /control/trajectory_setpoint (50 Hz),
     /costmap/local_voxels, /viz/mppi_candidates (MarkerArray)
@@ -184,7 +184,7 @@ def _setup(context):
                "-p", f"world_frame:={ISAM2_WORLD_FRAME}"],
             cwd=ROOT, output="screen"))
 
-    # 1. Global planner (/plan/global_rrt, latched + /viz/groundtruth_map_cloud): A* (default) or RRT*.
+    # 1. Global planner (/plan/global_path, latched + /viz/groundtruth_map_cloud): A* (default) or RRT*.
     planner = LaunchConfiguration("planner").perform(context)
     if planner not in ("astar", "rrt_star"):
         raise RuntimeError(f"planner must be astar | rrt_star, got {planner!r}")
@@ -305,8 +305,8 @@ def generate_launch_description():
             DeclareLaunchArgument("hardware", default_value="sitl", description="drone | sitl | flyx"),
             DeclareLaunchArgument("mode", default_value="classical", description="classical | rl_policy"),
             DeclareLaunchArgument("arm", default_value="false", description="true = arm and publish to PX4"),
-            DeclareLaunchArgument("mppi_samples", default_value="2048", description="Number of MPPI rollouts"),
-            DeclareLaunchArgument("cruise_speed_m_s", default_value="2.60", description="Nominal cruise speed m/s"),
+            DeclareLaunchArgument("mppi_samples", default_value="1024", description="Number of MPPI rollouts (quad.py plant; budget on the Jetson TBD)"),
+            DeclareLaunchArgument("cruise_speed_m_s", default_value="1.50", description="Nominal cruise speed m/s (skybeta flight_interface clamps |v| at 1.5)"),
             DeclareLaunchArgument("sim_loopback", default_value="false", description="true = standalone closed-loop RViz demo without Gazebo"),
             DeclareLaunchArgument("inject_demo_pillar", default_value="false", description="true = inject unmodeled vertical pole at [1.75, -2.51] for MPPI evasion demo"),
             DeclareLaunchArgument("rviz", default_value="false", description="true = launch rviz2 with config/maze_rviz.rviz"),

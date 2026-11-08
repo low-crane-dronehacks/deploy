@@ -44,8 +44,12 @@ struct AStarConfig {
   double snap_radius_m{0.30};         // max distance a blocked goal / start is moved to a free cell
   int chaikin_iterations{4};
   double resample_ds_m{0.02};
-  double cruise_speed_m_s{2.60};
+  double cruise_speed_m_s{1.50};      // skybeta flight_interface max_speed_mps (conservative; raise together)
   double lat_acc_m_s2{3.0};
+  // Heading-feasible speed: the reference heading is the path tangent, which turns at v * curvature. The vehicle
+  // can yaw at most quad.py's LEE_MAX_YAW_RATE (60 deg/s) and its yaw-rate loop lags, so cap v <= this / curvature
+  // or the camera (along body x) falls behind the direction of travel in the chicanes. 0 = off.
+  double yaw_rate_max_rad_s{M_PI / 4.0};
   double acc_m_s2{2.0};
   double end_speed_m_s{0.0};          // stop at the last goal (pad hover)
   int curvature_smooth_half_window{5};

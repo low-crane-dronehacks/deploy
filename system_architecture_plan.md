@@ -135,7 +135,7 @@ The autonomy system decouples **high-rate continuous local control** from **low-
 | `/odometry/local` | `nav_msgs/Odometry` | 100 Hz | VIO Front-End | MPPI, RL, PX4 Bridge | Continuous, jump-free local odometry (`odom -> base_link`). |
 | `/tf` (`map -> odom`) | `tf2_msgs/TFMessage` | 20 Hz | iSAM2 Backend | TF Buffer | Global correction transform aligning local frame with maze map. |
 | `/fmu/in/vehicle_visual_odometry` | `px4_msgs/VehicleOdometry` | 100 Hz | PX4 Bridge Node | PX4 EKF2 | Feeds local visual odometry into PX4 state estimator. |
-| `/plan/global_rrt` | `nav_msgs/Path` | 1 Hz / Event | RRT* Planner | Path Transformer | Global geometric path from current pose to maze goal in `map` frame. |
+| `/plan/global_path` | `nav_msgs/Path` | 1 Hz / Event | RRT* Planner | Path Transformer | Global geometric path from current pose to maze goal in `map` frame. |
 | `/plan/local_reference` | `nav_msgs/Path` | 20 Hz | Path Transformer | MPPI Controller | Sliding lookahead window of RRT* path transformed into `odom` frame. |
 | `/plan/rl_lookaheads` | `std_msgs/Float32MultiArray` | 50 Hz | Path Transformer | RL Obs Buffer | 3–5 relative future waypoints $[\Delta x, \Delta y, \Delta z]$ sampled along RRT*. |
 | `/costmap/local_voxels` | `nav_msgs/OccupancyGrid` or STVL | 30 Hz | STVL / Costmap2D | MPPI Controller | Combined map of static maze walls + unmodeled obstacles (beams/pillars). |
@@ -253,7 +253,7 @@ To ensure zero-shot transfer into the netted maze:
 ### Work Package WP-3: Classical Planning & Costmap (`pkg_maze_planning`)
 * **Goal:** Implement the RRT* global reference solver, STVL costmap, and MPPI local controller.
 * **Primary Tasks:**
-  1. **RRT* Global Planner:** Ingest 2.5D/3D prior maze map. Compute clearance-constrained optimal path to finish; publish `/plan/global_rrt`.
+  1. **RRT* Global Planner:** Ingest 2.5D/3D prior maze map. Compute clearance-constrained optimal path to finish; publish `/plan/global_path`.
   2. **Path Transformer:** Track current pose, extract lookahead path segments, and transform into `odom` frame as `/plan/local_reference` and `/plan/rl_lookaheads`.
   3. **Costmap Layer (STVL):** Lock static maze walls into voxel memory; update unmodeled obstacles using `/oak/points/clamped`.
   4. **MPPI Controller:** Run 2048 rollouts at 50 Hz on GPU/CPU to track path and avoid unmodeled obstacles. Output `/control/trajectory_setpoint`.
