@@ -2,6 +2,7 @@
 
 | file | trained | what it can do |
 |---|---|---|
+| `policies/c5_s164_1575.npz` | Course-v5 fine-tune of asbuilt_s115_3050, run `c5ft115_pert30_s164` @1575. Action limits 1.2/0.6/0.6 m/s, fixed observation scale 5/3/2, yaw 1.0 rad/s. Trained with either-edge depth bands and edge filling. | **Available by explicit selection.** [PR #1](https://github.com/low-crane-dronehacks/deploy/pull/1) reports 96.1% nominal / 87.1% perturbed launch success with edge filling; those results do not describe this deployment's current no-fill preprocessing. Artifact copied unchanged from PR commit `5e42c14`. |
 | `policies/anneal_slow_b128_3255.npz` | **Speed curriculum to the drone's envelope**: from cur4_c50_band128 (5 m/s), action scale annealed to 1.2/0.6/0.6 m/s over 30M steps, then 30M steps there (dronehacks-sim-eval `anneal_b128_s101` @3255). Yaw 1.0 rad/s. Obs velocity scale stays 5/3/2 (meta `v_obs_scale`) | **Recommended for the real drone.** From launch, at 1.2 m/s with |v| clamped to 1.45 (256 deterministic launches each): 50.0% on `real` (collision 3.9%), 43.8% with an 80 px left band, 43.0% on clean depth. The first slow policy that works: every slow run trained at 1.2 m/s from the start sat at 0% (it turns into the corridor wall tip). 2026-11-08 |
 | `policies/cur4_clean50_800.npz` | netrand2_675 fine-tuned with 50% of episodes on CLEAN depth (other effects on), randomized net returns, skip-terminal (dronehacks-sim-eval `cur4_nr2_clean50` @800, early: ~15M of 50M steps) | **Experimental, for FlyX/SITL.** From launch: 72.7% on `real` (stereo), 51.6% on `real` with clean depth (128 each). The first policy that works on both. 2026-11-07 19:30 UTC |
 | `policies/cur4_netrand2_675.npz` | s5 @4450 fine-tuned with the stereo net-return rate drawn per episode from U(0, 0.15) (dronehacks-sim-eval `cur4_s5ft_netrand2` @675) | **Recommended.** From launch on `real`: 78.7% at the default 3% net returns (512 launches; collision 4.1%, floor 12.3%), 46.1% at 0%, 73.4% at 10% (128 each). Beats netrand_1300 at all three. **Fails with clean depth** (0-1% in the ideal sim or with every effect but stereo), so expect it to fail in Gazebo SITL, whose depth camera is clean. 2026-11-07 18:10 UTC |
@@ -13,6 +14,10 @@
 
 **Export** from dronehacks-sim (NumPy only, no torch on the drone):
 `python -m dronehacks.export_policy <ckpt> --out policies/<name>.npz`.
+
+Select v5 with `policy:=policies/c5_s164_1575.npz`. The default remains `anneal_slow_b128_3255.npz`.
+V5's training used 16-column edge filling, while deployment currently leaves invalid depth near.
+Adding these weights does not resolve that preprocessing mismatch or validate real-world performance.
 
 **Observation contract** (`policynav/obs.py`, which must match training):
 - Velocity normalization uses metadata `v_obs_scale`, independently of action limits `v_max`.

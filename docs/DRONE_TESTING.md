@@ -171,6 +171,10 @@ eye ordering/calibration suggests reversed inputs. This swaps image and camera-i
 Verify a known-distance object on each side of the view; an invalid band on the right alone is not proof
 of swapped eyes. Nonpositive/nonfinite baselines now prevent depth output instead of merely logging a
 warning. No edge fill is enabled. The policy default remains `anneal_slow_b128_3255.npz`.
+V5 is included and can be inspected without commands using
+`ros2 launch policynav skybeta.launch.py mode:=handheld policy:=policies/c5_s164_1575.npz`.
+Its reported simulation results used edge filling, which is not enabled here; this is a preprocessing
+mismatch, not a validated reproduction of those results.
 
 Check the selected policy's exported `v_obs_scale`: this policy family uses `[5, 3, 2]` despite action
 limits of `[1.2, 0.6, 0.6]`. Missing scale metadata uses `[5, 3, 2]` with a Python warning; malformed scales
