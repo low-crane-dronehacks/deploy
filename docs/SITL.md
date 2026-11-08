@@ -130,3 +130,37 @@ strike on the wall 0.46 m behind the launch mark at ~9 s (roll/pitch ~77 deg), t
 Checked (no arming): `SKYBETA=1 EV_SOURCE=truth_odom` -> spawn on the pad, PX4 xy/z/heading valid, bridge healthy;
 `sim_pilot.py --check` -> Altitude -> Position on the ground ("check passed"); `SKYBETA=1 EV_SOURCE=cuvslam` ->
 Multicamera, 283 features/frame on the pad, PX4 valid. Not checked: an armed flight with these changes.
+
+### Our airframe in Gazebo (`MODEL=dronehacks_stereo`, the default since 2026-11-08)
+
+PX4's x500 reaches ~0.39 m from its centre (rotors 0.246 m out, 0.14 m props); the planner and MPPI plan for our drone
+(`collision_radius_m` 0.2; the corridor_end pass has ~0.24 m clearance). The first maze-stack flight on the x500 clipped
+the corridor wall's end at the right turn 4.7 s after arming (0.5 m sideways in 0.1 s, roll +40 deg) and tumbled out
+of the arena. `sitl/models/make_dronehacks_quad.py` generates our quad from PX4's x500 files (sensors, motor plugins,
+meshes) with the training plant's numbers (`dronehacks-sim/dronehacks/quad.py`):
+
+| | dronehacks_quad | x500 |
+|---|---|---|
+| mass, inertia | 1.5 kg, (0.012, 0.012, 0.020) | 2.0 kg, (0.022, 0.022, 0.040) |
+| rotors | X at +-0.13 m (0.184 m from centre) | +-0.174 m (0.246 m) |
+| max thrust / rotor | 10 N (2.7:1) | 8.5 N (1.7:1) |
+| motor time constant | 0.03 s | 0.0125 up / 0.025 down |
+| reach (collision) | body box corners 0.187 m; 5 in props: 0.247 m | 0.39 m |
+
+Kept from the x500 deliberately: moment constant 0.016 (training uses 0.07: with x500 tuning that is ~9x the yaw
+response) and the prop size (quad.py has none; 5 in assumed). **The real drone's measured reach decides whether the
+corridor_end pass is safe**: 0.247 m (5 in props) is already above the planner's 0.24 m there.
+
+PX4 (appended to the private airframe by `run_native.sh` for `dronehacks_*`): `CA_ROTOR0..3` at (+-0.13, +-0.13) FRD
+in the x500's rotor order, KM +-0.05; `MPC_THR_HOVER` 0.50 (10 N rotors, 1.5 kg, ESC linear in speed); rate gains
+scaled for ~1.6x roll/pitch and ~2.3x yaw acceleration per command (MC_ROLL/PITCHRATE P 0.095 I 0.127 D 0.0019,
+MC_YAWRATE P 0.085 I 0.043). A starting tune: verify with a hover before trusting it.
+
+Camera frames: the OAK sits on the nose (depth optical frame at (0.132, 0, 0.019) in base_link; stereo eyes at
+(0.12, +-0.0375, 0.02)). The x500 depth frame was published 0.24 m too high (the rig's (0.132, 0, 0.261) counted the
+landing-gear height twice: base_link is already at 0.24 m in the model frame); now (0.132, 0, 0.021).
+`sitl/rig_entry.sh` (Docker rig) still has the old value.
+
+Checked (no arming): spawns, PX4 boots with the new mixer / gains / hover thrust (read back with `px4-param show`),
+position + heading valid, Gazebo link poses match the design, stereo 29 Hz with identical stamps, IMU 200 Hz, depth
+28 Hz, TF as above; maze stack stage 0 ALL PASS (stack vs truth 0.03 m, 0.7 deg). Not checked: any flight.

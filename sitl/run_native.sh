@@ -27,7 +27,11 @@
 #                     world (EV_HEADING=odom). Needs EV_SOURCE=cuvslam or truth_odom. Then: the team node (e.g.
 #                     climb_forward_hold_skybeta.py fly:=true) + python3 sitl/sim_pilot.py --arm (arms; approval).
 #   GUI=1             (default) open the Gazebo window; GUI=0 = headless
-#   MODEL=x500_stereo (default) | x500_depth
+#   MODEL=dronehacks_stereo (default): OUR quad (sitl/models/make_dronehacks_quad.py, from the training plant:
+#                     1.5 kg, rotors +-0.13 m, 10 N each, ~0.25 m reach) + OAK depth + stereo + IMU at the nose;
+#                     PX4 gets the matching mixer (CA_ROTOR*), hover thrust and scaled rate gains below
+#   MODEL=dronehacks_quad (no cameras) | x500_stereo | x500_depth (PX4's x500: ~0.39 m reach, too big for the
+#                     course's tight passes, see docs/SITL.md)
 #   SPAWN=launch      (default) the launch mark (world/spawn.txt), as the competition: only 0.39 m from the wall behind
 #   SPAWN=open        on the landing pad, NED (-1.15, -1.95), facing north: 1.05 m clearance all round
 #   SPAWN_POSE=x,y,z,roll,pitch,yaw  (ENU) overrides both
@@ -43,7 +47,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"; REPO="$(cd "$HERE/.." && pwd)"
 PX4_DIR=${PX4_DIR:-$HOME/PX4-v1.17}; B=$PX4_DIR/build/px4_sitl_default
 WS=${PX4_MSGS_WS:-$HOME/isam2_ws}; AGENT=${XRCE_AGENT:-$HOME/Micro-XRCE-DDS-Agent/build/MicroXRCEAgent}
 VENV=${CUVSLAM_VENV:-$HOME/cuvslam-venv}; RUN=${RUN_DIR:-/tmp/dronehacks-native}
-EV_SOURCE=${EV_SOURCE:-truth}; GUI=${GUI:-1}; MODEL=${MODEL:-x500_stereo}; WORLD=dronehacks; NAME=${MODEL}_0
+EV_SOURCE=${EV_SOURCE:-truth}; GUI=${GUI:-1}; MODEL=${MODEL:-dronehacks_stereo}; WORLD=dronehacks; NAME=${MODEL}_0
 PIDS=$RUN/pids
 
 env_setup() {   # clean ROS environment: no conda, ROS + px4_msgs workspace, our + PX4's Gazebo resources
@@ -73,7 +77,16 @@ wait_for() {    # wait_for <seconds> <description> <test command...>
 up() {
   [ -s "$PIDS" ] && { echo "already up (pids in $PIDS); run '$0 down' first"; exit 1; }
   case "$EV_SOURCE" in truth|cuvslam|truth_odom) ;; *) echo "EV_SOURCE must be truth | cuvslam | truth_odom"; exit 1;; esac
-  [ "$EV_SOURCE" = cuvslam ] && [ "$MODEL" != x500_stereo ] && { echo "EV_SOURCE=cuvslam needs MODEL=x500_stereo"; exit 1; }
+  # per model: stereo pair?, depth camera optical frame in base_link (x y z), stereo link in base_link (x z)
+  local STEREO=0 DEPTH_TF="" STEREO_TF=""
+  case "$MODEL" in
+    dronehacks_stereo) STEREO=1; DEPTH_TF="0.13233 0.0 0.01878"; STEREO_TF="0.12 0.02" ;;
+    dronehacks_quad)   ;;
+    x500_stereo)       STEREO=1; DEPTH_TF="0.13233 0.0 0.02078"; STEREO_TF="0.13 0.20" ;;
+    x500_depth)        DEPTH_TF="0.13233 0.0 0.02078" ;;
+    *) echo "MODEL must be dronehacks_stereo | dronehacks_quad | x500_stereo | x500_depth"; exit 1 ;;
+  esac
+  [ "$EV_SOURCE" != truth ] && [ "$STEREO" = 0 ] && [ "$EV_SOURCE" = cuvslam ] && { echo "EV_SOURCE=cuvslam needs a stereo model (dronehacks_stereo / x500_stereo)"; exit 1; }
   SKYBETA=${SKYBETA:-0}
   [ "$SKYBETA" = 1 ] && [ "$EV_SOURCE" = truth ] && {
     echo "SKYBETA=1 needs EV_SOURCE=cuvslam or truth_odom (skybeta nodes read /visual_slam/tracking/odometry)"; exit 1; }
@@ -98,7 +111,7 @@ up() {
   python3 "$HERE/add_normals.py" "$HERE/world" "$RUN/world" > "$RUN/world.log" 2>&1
   cp -r "$PX4_GZ_MODELS/x500" "$PX4_GZ_MODELS/x500_depth" "$RUN/models/"
   [ -d "$PX4_GZ_MODELS/x500_base" ] && cp -r "$PX4_GZ_MODELS/x500_base" "$RUN/models/"
-  cp -r "$HERE/models/x500_stereo" "$RUN/models/"
+  cp -r "$HERE/models/x500_stereo" "$HERE/models/dronehacks_quad" "$HERE/models/dronehacks_stereo" "$RUN/models/"
   local SOC=${BATTERY_SOC:-1.0} TF
   TF=$(cd "$HERE" && PYTHONPATH="$HERE" python3 -c "from battery import LiPoPack as P; p=P.from_json('battery_4s5000.json'); v,i=p.solve($SOC,p.hover_thrust_n); print(round(float(p.thrust_factor(v)),4))")
   python3 - "$TF" "$RUN/models" <<'PYEOF' > "$RUN/battery.log"
@@ -136,7 +149,20 @@ PYEOF
   # 4. PX4: private etc/ copy with the indoor / external-vision params (~/PX4-v1.17 stays untouched), fresh rootfs
   cp -r "$B/etc" "$RUN/etc"
   { echo; echo "# sitl/run_native.sh"; cat "$HERE/px4_params.txt"; echo "param set-default UXRCE_DDS_DOM_ID $DOMAIN"
-    [ "$SKYBETA" = 1 ] && echo "param set-default COM_RC_IN_MODE 0"; } \
+    [ "$SKYBETA" = 1 ] && echo "param set-default COM_RC_IN_MODE 0"
+    case "$MODEL" in dronehacks_*)
+      # our airframe (make_dronehacks_quad.py): mixer at the real rotor positions (FRD, x500 rotor order/turning),
+      # hover thrust ~0.50 (10 N rotors, 1.5 kg, ESC linear in speed), rate gains scaled for its ~1.6x roll/pitch and
+      # ~2.3x yaw acceleration per command vs the x500 (less arm, much less inertia). A STARTING tune: check a hover.
+      echo "param set-default CA_ROTOR0_PX 0.13";  echo "param set-default CA_ROTOR0_PY 0.13";  echo "param set-default CA_ROTOR0_KM 0.05"
+      echo "param set-default CA_ROTOR1_PX -0.13"; echo "param set-default CA_ROTOR1_PY -0.13"; echo "param set-default CA_ROTOR1_KM 0.05"
+      echo "param set-default CA_ROTOR2_PX 0.13";  echo "param set-default CA_ROTOR2_PY -0.13"; echo "param set-default CA_ROTOR2_KM -0.05"
+      echo "param set-default CA_ROTOR3_PX -0.13"; echo "param set-default CA_ROTOR3_PY 0.13";  echo "param set-default CA_ROTOR3_KM -0.05"
+      echo "param set-default MPC_THR_HOVER 0.50"
+      echo "param set-default MC_ROLLRATE_P 0.095";  echo "param set-default MC_ROLLRATE_I 0.127";  echo "param set-default MC_ROLLRATE_D 0.0019"
+      echo "param set-default MC_PITCHRATE_P 0.095"; echo "param set-default MC_PITCHRATE_I 0.127"; echo "param set-default MC_PITCHRATE_D 0.0019"
+      echo "param set-default MC_YAWRATE_P 0.085";   echo "param set-default MC_YAWRATE_I 0.043" ;;
+    esac; } \
     >> "$RUN/etc/init.d-posix/airframes/4001_gz_x500"
   start agent "$AGENT" udp4 -p 8888
   start px4 env -C "$RUN/rootfs" PX4_SYS_AUTOSTART=4002 PX4_SIM_MODEL=gz_x500_depth PX4_GZ_MODEL_NAME="$NAME" \
@@ -146,10 +172,13 @@ PYEOF
   # 5. ROS side: /clock, depth (+ stereo + IMU), TF, depth relay
   local DEPTH INFO BR=()
   DEPTH=$(gz topic -l | grep -m1 -E "depth_camera$"); INFO=$(gz topic -l | grep -m1 -E "depth_camera/camera_info$|^/camera_info$")
-  BR+=("/world/$WORLD/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock" "$DEPTH@sensor_msgs/msg/Image[gz.msgs.Image"
-       "$INFO@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo")
-  local REMAP=(-r "/world/$WORLD/clock:=/clock" -r "$DEPTH:=/camera/depth/image_raw_gz" -r "$INFO:=/camera/depth/camera_info")
-  if [ "$MODEL" = x500_stereo ]; then
+  BR+=("/world/$WORLD/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock")
+  local REMAP=(-r "/world/$WORLD/clock:=/clock")
+  if [ -n "$DEPTH_TF" ] && [ -n "$DEPTH" ]; then
+    BR+=("$DEPTH@sensor_msgs/msg/Image[gz.msgs.Image" "$INFO@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo")
+    REMAP+=(-r "$DEPTH:=/camera/depth/image_raw_gz" -r "$INFO:=/camera/depth/camera_info")
+  fi
+  if [ "$STEREO" = 1 ]; then
     BR+=("/stereo/left/image_gz@sensor_msgs/msg/Image[gz.msgs.Image" "/stereo/right/image_gz@sensor_msgs/msg/Image[gz.msgs.Image"
          "/stereo/left/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo"
          "/stereo/right/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo"
@@ -157,18 +186,24 @@ PYEOF
     REMAP+=(-r /stereo/left/image_gz:=/stereo/left/image -r /stereo/right/image_gz:=/stereo/right/image -r /stereo/imu_gz:=/stereo/imu)
   fi
   start bridge ros2 run ros_gz_bridge parameter_bridge "${BR[@]}" --ros-args "${REMAP[@]}"
-  # depth camera optical frame (OAK-D Lite on the x500_depth: x500 pose (.12,.03,.242) + sensor (.01233,-.03,.01878))
-  start tf_depth ros2 run tf2_ros static_transform_publisher --x 0.13233 --y 0.0 --z 0.26078 \
-    --qx -0.5 --qy 0.5 --qz -0.5 --qw 0.5 --frame-id base_link --child-frame-id camera_optical_frame
-  if [ "$MODEL" = x500_stereo ]; then   # x500_stereo/model.sdf: stereo link (.13, 0, .20), eyes at y = +-0.0375
-    start tf_left ros2 run tf2_ros static_transform_publisher --x 0.13 --y 0.0375 --z 0.20 \
+  # camera frames in base_link (per model, see the case above). The OakD-Lite sensor sits (.01233, -.03, .01878) from
+  # its model origin, which the models put at base_link (x, 0.03, ~0): base_link is already at the landing-gear
+  # height, so the x500 depth frame is ~0.02 m above base_link (the rig's 0.26 m counted the gear height twice).
+  if [ -n "$DEPTH_TF" ]; then
+    read -r DX DY DZ <<< "$DEPTH_TF"
+    start tf_depth ros2 run tf2_ros static_transform_publisher --x $DX --y $DY --z $DZ \
+      --qx -0.5 --qy 0.5 --qz -0.5 --qw 0.5 --frame-id base_link --child-frame-id camera_optical_frame
+  fi
+  if [ "$STEREO" = 1 ]; then             # stereo link at (SX, 0, SZ) in base_link, eyes at y = +-0.0375
+    read -r SX SZ <<< "$STEREO_TF"
+    start tf_left ros2 run tf2_ros static_transform_publisher --x $SX --y 0.0375 --z $SZ \
       --qx -0.5 --qy 0.5 --qz -0.5 --qw 0.5 --frame-id base_link --child-frame-id oak_left
-    start tf_right ros2 run tf2_ros static_transform_publisher --x 0.13 --y -0.0375 --z 0.20 \
+    start tf_right ros2 run tf2_ros static_transform_publisher --x $SX --y -0.0375 --z $SZ \
       --qx -0.5 --qy 0.5 --qz -0.5 --qw 0.5 --frame-id base_link --child-frame-id oak_right
-    start tf_imu ros2 run tf2_ros static_transform_publisher --x 0.13 --y 0.0 --z 0.20 \
+    start tf_imu ros2 run tf2_ros static_transform_publisher --x $SX --y 0.0 --z $SZ \
       --frame-id base_link --child-frame-id oak_imu
   fi
-  start depth_relay python3 "$HERE/depth_relay.py" --ros-args -p use_sim_time:=true
+  [ -n "$DEPTH_TF" ] && start depth_relay python3 "$HERE/depth_relay.py" --ros-args -p use_sim_time:=true
 
   # 6. PX4's position source. Exactly one publisher of /fmu/in/vehicle_visual_odometry.
   if [ "$EV_SOURCE" = truth ]; then

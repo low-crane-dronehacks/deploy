@@ -1,0 +1,189 @@
+# Maze stack on the native sim: config/maze_rviz.rviz + Gazebo truth, course mesh, depth (scripts/maze_sitl_check.py)
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 0.35
+      Cell Size: 1
+      Class: rviz_default_plugins/Grid
+      Color: 160; 160; 164
+      Enabled: true
+      Name: Arena Grid
+      Plane: XY
+      Plane Cell Count: 8
+      Reference Frame: <Fixed Frame>
+    - Class: rviz_default_plugins/TF
+      Enabled: true
+      Frame Timeout: 15
+      Marker Scale: 0.45
+      Name: TF Frames (map -> odom -> base_link)
+      Show Arrows: true
+      Show Axes: true
+      Show Names: true
+    - Alpha: 0.70
+      Autocompute Intensity Bounds: true
+      Class: rviz_default_plugins/PointCloud2
+      Color: 180; 195; 215
+      Color Transformer: AxisColor
+      Axis: Z
+      Decay Time: 0
+      Enabled: true
+      Name: GroundTruth Maze Walls (/viz/groundtruth_map_cloud)
+      Position Transformer: XYZ
+      Size (Meters): 0.055
+      Style: Boxes
+      Topic:
+        Depth: 5
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /viz/groundtruth_map_cloud
+    - Alpha: 0.65
+      Class: rviz_default_plugins/Map
+      Color Scheme: costmap
+      Draw Behind: true
+      Enabled: true
+      Name: Local Voxel Costmap Slice (/costmap/local_voxels)
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /costmap/local_voxels
+    - Alpha: 1
+      Buffer Length: 1
+      Class: rviz_default_plugins/Path
+      Color: 0; 230; 118
+      Enabled: true
+      Line Style: Billboards
+      Line Width: 0.045
+      Name: Global Informed RRT* Path (/plan/global_rrt)
+      Topic:
+        Depth: 5
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /plan/global_rrt
+    - Alpha: 1
+      Buffer Length: 1
+      Class: rviz_default_plugins/Path
+      Color: 0; 191; 255
+      Enabled: true
+      Line Style: Billboards
+      Line Width: 0.035
+      Name: Odom-Transformed Local Reference (/plan/local_reference)
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /plan/local_reference
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: MPPI Candidate Rollouts (/viz/mppi_candidates)
+      Namespaces:
+        mppi_candidates: true
+        mppi_optimal: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /viz/mppi_candidates
+    - Angle Tolerance: 0.1
+      Class: rviz_default_plugins/Odometry
+      Covariance:
+        Value: false
+      Enabled: true
+      Keep: 1
+      Name: Quadrotor Odometry (/odometry/local)
+      Position Tolerance: 0.1
+      Shape:
+        Alpha: 1
+        Axes Length: 0.35
+        Axes Radius: 0.03
+        Color: 255; 215; 0
+        Head Length: 0.12
+        Head Radius: 0.06
+        Shaft Length: 0.25
+        Shaft Radius: 0.03
+        Value: Arrow
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /odometry/local
+    - Class: rviz_default_plugins/Path
+      Name: Gazebo truth (/maze_viz/truth_path, green)
+      Enabled: true
+      Buffer Length: 1
+      Color: 60; 220; 60
+      Line Style: Billboards
+      Line Width: 0.03
+      Alpha: 1
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /maze_viz/truth_path
+    - Class: rviz_default_plugins/Marker
+      Name: Course mesh (/maze_viz/course)
+      Enabled: true
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /maze_viz/course
+    - Class: rviz_default_plugins/Image
+      Name: Depth camera (/camera/depth/image_raw)
+      Enabled: false
+      Normalize Range: false
+      Min Value: 0
+      Max Value: 6
+      Topic:
+        Depth: 1
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /camera/depth/image_raw
+  Enabled: true
+  Global Options:
+    Background Color: 28; 32; 38
+    Fixed Frame: map_ned
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 7.5
+      Enable Stereo Rendering:
+        Value: false
+      Focal Point:
+        X: 0.0
+        Y: 0.0
+        Z: -0.75
+      Focal Shape Fixed Size: true
+      Focal Shape Size: 0.05
+      Invert Z Axis: true
+      Name: Current View
+      Near Clip Distance: 0.01
+      Pitch: 0.85
+      Target Frame: <Fixed Frame>
+      Value: Orbit (rviz)
+      Yaw: 1.57
+Window Geometry:
+  Height: 960
+  Width: 1440

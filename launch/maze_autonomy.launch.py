@@ -284,10 +284,13 @@ def _setup(context):
 
     # 5. Optional RViz2 realtime 3D visualizer
     if rviz.lower() == "true":
-        rviz_cfg = os.path.join(ROOT, "config", "maze_rviz.rviz")
+        rviz_cfg = LaunchConfiguration("rviz_config").perform(context)
+        if not os.path.isabs(rviz_cfg):
+            rviz_cfg = os.path.join(ROOT, rviz_cfg)
         actions.append(
             ExecuteProcess(
-                cmd=["rviz2", "-d", rviz_cfg],
+                # sim time in sitl / flyx: every TF there is stamped on /clock, which a wall-clock RViz drops as stale
+                cmd=["rviz2", "-d", rviz_cfg, "--ros-args", "-p", f"use_sim_time:={sim_time_str}"],
                 cwd=ROOT,
                 output="screen",
             )
@@ -307,6 +310,8 @@ def generate_launch_description():
             DeclareLaunchArgument("sim_loopback", default_value="false", description="true = standalone closed-loop RViz demo without Gazebo"),
             DeclareLaunchArgument("inject_demo_pillar", default_value="false", description="true = inject unmodeled vertical pole at [1.75, -2.51] for MPPI evasion demo"),
             DeclareLaunchArgument("rviz", default_value="false", description="true = launch rviz2 with config/maze_rviz.rviz"),
+            DeclareLaunchArgument("rviz_config", default_value="config/maze_rviz.rviz",
+                                  description="RViz config (sitl/maze_sitl.rviz adds Gazebo truth + course mesh on the native sim)"),
             DeclareLaunchArgument("planner", default_value="astar", description="astar | rrt_star (global planner)"),
             DeclareLaunchArgument("prefer_window", default_value="true",
                                   description="true = window for the shared checkpoint (+5), false = Gate B"),
