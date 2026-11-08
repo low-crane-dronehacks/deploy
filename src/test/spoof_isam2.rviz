@@ -138,6 +138,28 @@ Visualization Manager:
       Line Style: Billboards
       Line Width: 0.03
       Alpha: 1
+    - Class: rviz_default_plugins/Path
+      Name: cuVSLAM path (orange, stereo:=true)
+      Enabled: true
+      Topic:
+        Value: /spoof/vslam_path
+        Depth: 1
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+        History Policy: Keep Last
+      Color: 255; 160; 30
+      Line Style: Billboards
+      Line Width: 0.03
+      Alpha: 1
+    - Class: rviz_default_plugins/Image
+      Name: Stereo left (stereo:=true)
+      Enabled: false
+      Topic:
+        Value: /stereo/left/image
+        Depth: 1
+        Durability Policy: Volatile
+        Reliability Policy: Best Effort
+        History Policy: Keep Last
     - Class: rviz_default_plugins/Odometry
       Name: iSAM2 pose
       Enabled: true

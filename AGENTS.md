@@ -7,6 +7,7 @@ Docs:
 - `docs/AUTONOMY_ARCHITECTURE.md`: Master reference for C++ EGO-Planner-v2, MPPI, RRT*, and iSAM2.
 - `docs/SITL.md`: Local PX4 SITL + Gazebo Harmonic rig.
 - `docs/FLYX_LOCAL.md`: Organizers' sim on pear-omen.
+- `docs/CUVSLAM_LOCAL.md`: cuVSLAM 17 on an x86 desktop (venv install) + stereo rendered from the course scan.
 - `docs/POLICIES.md`: Policy files + observation/action contract.
 - `docs/HARDWARE.md`: Kit, training-plant assumptions, open data.
 - `docs/ISAM2.md`: src/: C++ iSAM2 depth ICP + PX4 factor graph -> state + distance field for an MPPI.

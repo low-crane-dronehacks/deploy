@@ -321,6 +321,87 @@ class Renderer:
         return np.repeat(np.repeat(img, self.s, 0), self.s, 1)
 
 
+class StereoRenderer:
+    """Rectified OAK-like mono pair from the scan's colours, for cuVSLAM (--stereo).
+
+    Both eyes share the depth camera's orientation and intrinsics (640x400, fx 421); the left eye sits B/2 to the
+    left of the depth camera and the right eye B/2 to the right (body FRD y), i.e. the right eye is +B along the
+    optical x axis, as a rectified stereo pair. Each eye is a z-buffered splat of the coloured scan points rendered
+    at half resolution and bilinearly upsampled (soft, like a real lens), holes filled from neighbours, plus sensor
+    noise. Point-splat images are not camera images: this checks the VIO wiring and gives a rough accuracy, it does
+    not qualify the tracker on real stereo.
+    """
+
+    def __init__(self, pts, rgb, spacing, args, rng):
+        self.pts, self.spacing, self.args, self.rng = pts, spacing, args, rng
+        self.gray = (255 * (0.299 * rgb[:, 0] + 0.587 * rgb[:, 1] + 0.114 * rgb[:, 2])).astype(np.float32)
+        self.s = 2
+        self.w, self.h = CAM_W // self.s, CAM_H // self.s
+        self.f = CAM_F / self.s
+        self.cx, self.cy = (CAM_CX - 0.5) / self.s, (CAM_CY - 0.5) / self.s
+        b = args.baseline / 2
+        self.eyes = {'l': T_FRD_CAM + np.array([0.0, -b, 0.0]), 'r': T_FRD_CAM + np.array([0.0, b, 0.0])}
+
+    def render(self, p_wb, R_wb, eye):
+        from scipy.ndimage import grey_dilation, zoom
+        R_wc = R_wb @ R_FRD_OPT
+        t_wc = p_wb + R_wb @ self.eyes[eye]
+        pc = (self.pts - t_wc) @ R_wc
+        z = pc[:, 2]
+        ok = (z > 0.1) & (z < 15.0)
+        pc, z, g = pc[ok], z[ok], self.gray[ok]
+        u = np.rint(self.f * pc[:, 0] / z + self.cx).astype(np.int32)
+        v = np.rint(self.f * pc[:, 1] / z + self.cy).astype(np.int32)
+        m = 5
+        ok = (u >= -m) & (u < self.w + m) & (v >= -m) & (v < self.h + m)
+        u, v, z, g = u[ok], v[ok], z[ok], g[ok]
+        r = np.clip(np.rint(0.5 * self.f * self.spacing / z + 0.25), 0, 4).astype(np.int32)
+        us, vs, zs, gs = [u], [v], [z], [g]
+        for rad in (1, 2, 3, 4):
+            sel = r >= rad
+            if not sel.any():
+                break
+            ur, vr, zr, gr = u[sel], v[sel], z[sel], g[sel]
+            for dv in range(-rad, rad + 1):
+                for du in range(-rad, rad + 1):
+                    if max(abs(du), abs(dv)) == rad:
+                        us.append(ur + du); vs.append(vr + dv); zs.append(zr); gs.append(gr)
+        u, v, z, g = (np.concatenate(a) for a in (us, vs, zs, gs))
+        ok = (u >= 0) & (u < self.w) & (v >= 0) & (v < self.h)
+        pix, z, g = v[ok] * self.w + u[ok], z[ok], g[ok]
+        order = np.argsort(z, kind='stable')
+        pix, g = pix[order], g[order]
+        first = np.unique(pix, return_index=True)[1]
+        img = np.full(self.w * self.h, -1.0, np.float32)
+        img[pix[first]] = g[first]
+        img = img.reshape(self.h, self.w)
+        for _ in range(3):                                   # fill small holes from the brightest neighbour
+            hole = img < 0
+            if not hole.any():
+                break
+            img = np.where(hole, grey_dilation(img, size=(3, 3)), img)
+        img[img < 0] = 90.0                                  # nothing scanned there (beyond the room)
+        img = zoom(img, self.s, order=1, grid_mode=True, mode='nearest')[:CAM_H, :CAM_W]   # pixel-area aligned
+        img += self.rng.normal(0, self.args.pixel_noise, img.shape).astype(np.float32)
+        return np.ascontiguousarray(np.clip(img, 0, 255).astype(np.uint8))
+
+
+def imu_samples(t, vel, R, args, rng):
+    """IMU (body FLU, ROS convention: at rest the accelerometer reads +9.81 up) from the truth trajectory:
+    specific force R^T (a - g) and body rate from consecutive attitudes, white noise from the densities in
+    onboard/config/vio.yaml. -> accel (N, 3), gyro (N, 3)."""
+    dt = t[1] - t[0]
+    acc = np.gradient(vel, dt, axis=0)
+    f_frd = np.einsum('nji,nj->ni', R, acc - np.array([0.0, 0.0, G]))
+    w_frd = np.zeros_like(f_frd)
+    w_frd[:-1] = Rotation.from_matrix(np.einsum('nji,njk->nik', R[:-1], R[1:])).as_rotvec() / dt
+    w_frd[-1] = w_frd[-2]
+    rate = 1.0 / dt
+    f = f_frd @ F_FLU.T + rng.normal(0, args.accel_noise_density * math.sqrt(rate), f_frd.shape)
+    w = w_frd @ F_FLU.T + rng.normal(0, args.gyro_noise_density * math.sqrt(rate), w_frd.shape)
+    return f, w
+
+
 def save_plan_png(path, pts, rgb, clr, axis, route, traj, renderer):
     import matplotlib
     matplotlib.use('Agg')
@@ -366,7 +447,7 @@ def wrap(a):
     return (a + math.pi) % (2 * math.pi) - math.pi
 
 
-def run_ros(args, pts, rgb, tree, traj, est, renderer):
+def run_ros(args, pts, rgb, tree, traj, est, renderer, stereo=None):
     import rclpy
     from geometry_msgs.msg import PoseStamped, TransformStamped
     from nav_msgs.msg import Odometry, Path as PathMsg
@@ -375,7 +456,7 @@ def run_ros(args, pts, rgb, tree, traj, est, renderer):
     from rclpy.node import Node
     from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
     from rosgraph_msgs.msg import Clock
-    from sensor_msgs.msg import CameraInfo, Image, PointCloud2, PointField
+    from sensor_msgs.msg import CameraInfo, Image, Imu, PointCloud2, PointField
     from sensor_msgs_py import point_cloud2
     from std_msgs.msg import Header
     from visualization_msgs.msg import Marker
@@ -401,7 +482,16 @@ def run_ros(args, pts, rgb, tree, traj, est, renderer):
     pub_info = node.create_publisher(CameraInfo, '/camera/depth/camera_info', qos_profile_sensor_data)
     pub_scan = node.create_publisher(PointCloud2, '/spoof/scan', latched)
     pub_cad = node.create_publisher(Marker, '/spoof/cad_map', latched)
-    pub_paths = {k: node.create_publisher(PathMsg, f'/spoof/{k}_path', latched) for k in ('truth', 'px4', 'isam2')}
+    pub_paths = {k: node.create_publisher(PathMsg, f'/spoof/{k}_path', latched)
+                 for k in ('truth', 'px4', 'isam2', 'vslam')}
+    if stereo is not None:
+        pub_st = {e: node.create_publisher(Image, f'/stereo/{n}/image', qos_profile_sensor_data)
+                  for e, n in (('l', 'left'), ('r', 'right'))}
+        pub_st_info = {e: node.create_publisher(CameraInfo, f'/stereo/{n}/camera_info', qos_profile_sensor_data)
+                       for e, n in (('l', 'left'), ('r', 'right'))}
+        pub_imu = node.create_publisher(Imu, '/stereo/imu', QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=512))
+        imu_acc, imu_gyr = imu_samples(t_arr, vel, R, args, np.random.default_rng(args.seed + 7))
     static_tf, tf = StaticTransformBroadcaster(node), TransformBroadcaster(node)
 
     def stamp(ts):
@@ -428,7 +518,10 @@ def run_ros(args, pts, rgb, tree, traj, est, renderer):
     # static TF: RViz-friendly ENU map above the NED world; camera on base_link (FLU) as the node expects
     static_tf.sendTransform([
         tfmsg('map', world, R_ENU_NED, (0, 0, 0), 0.0),
-        tfmsg('base_link', 'camera_depth_optical', F_FLU @ R_FRD_OPT, F_FLU @ T_FRD_CAM, 0.0)])
+        tfmsg('base_link', 'camera_depth_optical', F_FLU @ R_FRD_OPT, F_FLU @ T_FRD_CAM, 0.0)]
+        + ([tfmsg('base_link', 'oak_left', F_FLU @ R_FRD_OPT, F_FLU @ stereo.eyes['l'], 0.0),
+            tfmsg('base_link', 'oak_right', F_FLU @ R_FRD_OPT, F_FLU @ stereo.eyes['r'], 0.0),
+            tfmsg('base_link', 'oak_imu', np.eye(3), (0, 0, 0), 0.0)] if stereo is not None else []))
 
     sel = (np.abs(pts[:, 0]) < 3.6) & (np.abs(pts[:, 1]) < 3.6) & (-pts[:, 2] < 3.0)
     idx = np.where(sel)[0]
@@ -459,8 +552,23 @@ def run_ros(args, pts, rgb, tree, traj, est, renderer):
     info.p = [CAM_F, 0.0, CAM_CX, 0.0, 0.0, CAM_F, CAM_CY, 0.0, 0.0, 0.0, 1.0, 0.0]
     info.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
     info.d = [0.0] * 5
+    st_info = {}
+    for e, frame in (('l', 'oak_left'), ('r', 'oak_right')):
+        ci = CameraInfo()
+        ci.header.frame_id = frame
+        ci.width, ci.height, ci.distortion_model = CAM_W, CAM_H, 'plumb_bob'
+        ci.k = [CAM_F, 0.0, CAM_CX, 0.0, CAM_F, CAM_CY, 0.0, 0.0, 1.0]
+        tx = -CAM_F * args.baseline if e == 'r' else 0.0      # rectified pair: right P carries -fx * B
+        ci.p = [CAM_F, 0.0, CAM_CX, tx, 0.0, CAM_F, CAM_CY, 0.0, 0.0, 0.0, 1.0, 0.0]
+        ci.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+        ci.d = [0.0] * 5
+        st_info[e] = ci
 
     rows, obstacle_cloud, map_cloud, kf_path, lock = [], [None], [None], [None], threading.Lock()
+    vrows = []                                            # cuVSLAM: (t, truth xyz, est xyz, yaw err deg)
+    vslam_path = PathMsg(header=Header(frame_id=world))
+    T_flu0 = np.eye(4)
+    T_flu0[:3, :3], T_flu0[:3, 3] = R[0] @ F_FLU, p[0]    # cuVSLAM's world = the initial base_link (FLU)
     isam_path = PathMsg(header=Header(frame_id=world))
     px4_path = PathMsg(header=Header(frame_id=world))
 
@@ -479,10 +587,26 @@ def run_ros(args, pts, rgb, tree, traj, est, renderer):
             if len(rows) % 5 == 0:
                 isam_path.poses.append(pose(ts, pv, Rm))
 
+    def on_vslam(m: Odometry):
+        ts = m.header.stamp.sec + 1e-9 * m.header.stamp.nanosec
+        i = interp_truth(ts)
+        q = m.pose.pose.orientation
+        O = np.eye(4)
+        O[:3, :3] = Rotation.from_quat([q.x, q.y, q.z, q.w]).as_matrix()
+        O[:3, 3] = [m.pose.pose.position.x, m.pose.pose.position.y, m.pose.pose.position.z]
+        Tw = T_flu0 @ O                                    # world NED <- base_link (FLU)
+        Rw = Tw[:3, :3] @ F_FLU                            # world NED <- body FRD
+        with lock:
+            vrows.append((ts, *p[i], *Tw[:3, 3], math.degrees(abs(wrap(yaw_of(Rw) - yaw_of(R[i]))))))
+            if len(vrows) % 3 == 0:
+                vslam_path.poses.append(pose(ts, Tw[:3, 3], Rw))
+
     def on_obst(m: PointCloud2):
         obstacle_cloud[0] = m
 
     node.create_subscription(Odometry, '/isam2_depth/odometry', on_odom, 50)
+    if stereo is not None:
+        node.create_subscription(Odometry, '/visual_slam/tracking/odometry', on_vslam, 50)
     node.create_subscription(PointCloud2, '/isam2_depth/obstacles', on_obst, 1)
     node.create_subscription(PointCloud2, '/isam2_depth/map', lambda m: map_cloud.__setitem__(0, m), latched)
     node.create_subscription(PathMsg, '/isam2_depth/keyframes', lambda m: kf_path.__setitem__(0, m), latched)
@@ -506,8 +630,16 @@ def run_ros(args, pts, rgb, tree, traj, est, renderer):
         y_px4 = np.degrees(np.abs([wrap(x) for x in a[:, 8] - a[:, 4]]))
         y_isam = np.degrees(np.abs([wrap(x) for x in a[:, 12] - a[:, 4]]))
         if not final:
+            vs = ''
+            if stereo is not None:
+                with lock:
+                    if vrows:
+                        vr = vrows[-1]
+                        vs = f'   cuVSLAM {np.linalg.norm(np.subtract(vr[4:7], vr[1:4])):.3f} m / {vr[7]:.1f} deg'
+                    else:
+                        vs = '   cuVSLAM -'
             print(f'  t={t_now:6.1f} s  error now: iSAM2 {e_isam[-1]:.3f} m / {y_isam[-1]:.1f} deg   '
-                  f'PX4 {e_px4[-1]:.3f} m / {y_px4[-1]:.1f} deg')
+                  f'PX4 {e_px4[-1]:.3f} m / {y_px4[-1]:.1f} deg' + vs)
             return
         rms = lambda x: float(np.sqrt(np.mean(np.square(x))))
         print('\nsummary over %d iSAM2 odometry messages:' % len(a))
@@ -528,6 +660,17 @@ def run_ros(args, pts, rgb, tree, traj, est, renderer):
                 d = tree.query(xyz.astype(np.float64))[0]
                 print(f'  {name}: {len(xyz)} voxels, distance to the scan median {np.median(d):.3f} m, '
                       f'{100 * np.mean(d < 0.1):.0f}% within 10 cm')
+        if stereo is not None:
+            with lock:
+                v = np.array(vrows) if vrows else None
+            if v is None:
+                print('  cuVSLAM: no /visual_slam/tracking/odometry received (is cuvslam_lib_node running?)')
+            else:
+                ev = np.linalg.norm(v[:, 4:7] - v[:, 1:4], axis=1)
+                plen = float(np.sum(np.linalg.norm(np.diff(p, axis=0), axis=1)))
+                print(f'  cuVSLAM ({len(v)} poses, stereo rendered from the scan): position rms {rms(ev):.3f} '
+                      f'max {ev.max():.3f} final {ev[-1]:.3f} m ({100 * ev[-1] / plen:.1f}% of {plen:.1f} m), '
+                      f'yaw rms {rms(v[:, 7]):.2f} final {v[-1, 7]:.2f} deg')
         kp = kf_path[0]
         if kp is not None and kp.poses:
             e_kf, y_kf = [], []
@@ -543,7 +686,7 @@ def run_ros(args, pts, rgb, tree, traj, est, renderer):
 
     print(f'spoofing {t_arr[-1]:.0f} s of sim time at {args.rtf}x real time; Ctrl-C to stop')
     depth_period, px4_every = 1.0 / args.depth_hz, max(1, int(round(1.0 / (args.px4_hz * dt))))
-    next_depth, next_report = 0.0, 5.0
+    next_depth, next_report, next_stereo = 0.0, 5.0, 0.0
     wall0 = time.monotonic()
     t_now = 0.0
     try:
@@ -573,6 +716,26 @@ def run_ros(args, pts, rgb, tree, traj, est, renderer):
                 tf.sendTransform(tfmsg(world, 'base_link', R[i] @ F_FLU, p[i], t_now))
                 if i % (px4_every * 10) == 0:
                     px4_path.poses.append(pose(t_now, p_e[i], R_e[i]))
+            if stereo is not None:
+                im = Imu()
+                im.header.stamp, im.header.frame_id = stamp(t_now), 'oak_imu'
+                im.linear_acceleration.x, im.linear_acceleration.y, im.linear_acceleration.z = map(float, imu_acc[i])
+                im.angular_velocity.x, im.angular_velocity.y, im.angular_velocity.z = map(float, imu_gyr[i])
+                im.orientation_covariance[0] = -1.0           # no orientation estimate
+                pub_imu.publish(im)
+                if t_now >= next_stereo:
+                    next_stereo += 1.0 / args.stereo_hz
+                    for e, frame in (('l', 'oak_left'), ('r', 'oak_right')):
+                        g = stereo.render(p[i], R[i], e)
+                        sm = Image()
+                        sm.header.stamp, sm.header.frame_id = stamp(t_now), frame
+                        sm.height, sm.width, sm.encoding, sm.is_bigendian, sm.step = CAM_H, CAM_W, 'mono8', 0, CAM_W
+                        sm.data = g.tobytes()
+                        st_info[e].header.stamp = sm.header.stamp
+                        pub_st_info[e].publish(st_info[e])
+                        pub_st[e].publish(sm)
+                    with lock:
+                        pub_paths['vslam'].publish(vslam_path)
             if t_now >= next_depth:
                 next_depth += depth_period
                 d = renderer.render(p[i], R[i])
@@ -638,6 +801,14 @@ def main(argv=None):
     g.add_argument('--cad', type=lambda s: Path(s) if s else None, default=DEPLOY_ROOT / 'sitl' / 'world' / 'course.obj',
                    help="designed-course mesh (ENU OBJ) shown in RViz on /spoof/cad_map; '' = off")
     g.add_argument('--plan_png', type=Path, help='no ROS: save the route + sample depth frames and exit')
+    g = ap.add_argument_group('stereo + IMU for cuVSLAM (docs/CUVSLAM_LOCAL.md)')
+    g.add_argument('--stereo', action='store_true', help='also publish a rendered mono pair + IMU on /stereo/*')
+    g.add_argument('--stereo_hz', type=float, default=15.0)
+    g.add_argument('--imu_hz', type=float, default=200.0, help='IMU rate (sets the simulation step)')
+    g.add_argument('--baseline', type=float, default=0.075, help='stereo baseline [m] (OAK-D S2: 7.5 cm)')
+    g.add_argument('--pixel_noise', type=float, default=2.0, help='image noise sigma [grey levels]')
+    g.add_argument('--gyro_noise_density', type=float, default=0.00244, help='rad/s/sqrt(Hz), as vio.yaml')
+    g.add_argument('--accel_noise_density', type=float, default=0.01862, help='m/s^2/sqrt(Hz), as vio.yaml')
     args = ap.parse_args(argv)
     if args.no_drift:
         args.yaw_drift_deg_s = args.yaw_rw_deg = args.pos_rw = 0.0
@@ -646,17 +817,18 @@ def main(argv=None):
     rng = np.random.default_rng(args.seed)
     pts, rgb, tree, spacing, prior = load_scene(args)
     route, clr, axis = plan_route(pts, prior, args)
-    dt = 0.01
+    dt = 1.0 / args.imu_hz if args.stereo else 0.01      # the IMU is published every simulation step
     traj = trajectory(route, args, dt)
     est = drift(*traj, args, rng)
     e = np.linalg.norm(est[0] - traj[1], axis=1)
     print(f'fake PX4 drift: final {e[-1]:.2f} m / {math.degrees(est[3][-1]):.1f} deg yaw '
           f'(bias {args.yaw_drift_deg_s} deg/s, scale {args.scale})')
     renderer = Renderer(pts, spacing, args, rng)
+    stereo = StereoRenderer(pts, rgb, spacing, args, rng) if args.stereo else None
     if args.plan_png:
         save_plan_png(args.plan_png, pts, rgb, clr, axis, route, traj, renderer)
         return 0
-    run_ros(args, pts, rgb, tree, traj, est, renderer)
+    run_ros(args, pts, rgb, tree, traj, est, renderer, stereo)
     return 0
 
 

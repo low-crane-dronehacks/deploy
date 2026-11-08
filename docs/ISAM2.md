@@ -130,6 +130,8 @@ ros2 launch src/test/spoof_isam2.launch.py ply:=... rviz:=false spoof_args:='--n
 /usr/bin/python3 src/test/spoof_px4_depth.py scan.ply --plan_png /tmp/route.png    # route + depth frames, no ROS
 ```
 
+`stereo:=true` also renders a stereo pair + IMU from the scan and runs cuVSLAM on it ([CUVSLAM_LOCAL.md](CUVSLAM_LOCAL.md)).
+
 RViz (fixed frame `map`, ENU above the NED world): scan (RGB), truth path green, spoofed PX4 path red, iSAM2 path
 blue, obstacle voxels orange, depth image. Drift knobs: `--yaw_drift_deg_s`, `--yaw_rw_deg`, `--scale`, `--pos_rw`.
 
