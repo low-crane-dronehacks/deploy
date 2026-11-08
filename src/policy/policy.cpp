@@ -97,6 +97,10 @@ PolicyMeta parse_meta(const std::string& s) {
   m.hfov_deg = num("hfov_deg", m.hfov_deg);
   m.vfov_deg = num("vfov_deg", m.vfov_deg);
   m.rf_max = num("rf_max", m.rf_max);
+  const double edge_fill = num("edge_fill_cols", 0);
+  if (!std::isfinite(edge_fill) || edge_fill < 0 || edge_fill != std::floor(edge_fill) || edge_fill > m.depth_w / 2)
+    throw std::runtime_error("policy meta: edge_fill_cols must be an integer between 0 and half the depth width");
+  m.edge_fill_cols = int(edge_fill);
   return m;
 }
 
@@ -289,6 +293,7 @@ DepthReprojector make_reprojector(const PolicyMeta& meta, const std::array<doubl
   p.vfov_deg = meta.vfov_deg;
   p.far = meta.far_clip;
   p.stride = stride;
+  p.edge_fill_cols = meta.edge_fill_cols;
   return DepthReprojector(K, src_h, src_w, R_body_cam, t_body_cam, p);
 }
 

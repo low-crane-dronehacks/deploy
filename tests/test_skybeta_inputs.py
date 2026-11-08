@@ -44,14 +44,12 @@ def node():
     return n
 
 
-@pytest.mark.parametrize('kind', ['state', 'attitude', 'range', 'disarm', 'offboard'])
+@pytest.mark.parametrize('kind', ['state', 'attitude', 'disarm', 'offboard'])
 def test_bad_input_prevents_policy_step(node, kind):
     if kind == 'state':
         node.state_t = 9.
     elif kind == 'attitude':
         node.feedback.att_t = 9.
-    elif kind == 'range':
-        node._on_lpos(lpos(timestamp_sample=1_100_000, dist_bottom_valid=False))
     elif kind == 'disarm':
         node.state['armed'] = False
     else:
@@ -65,6 +63,12 @@ def test_bad_input_prevents_policy_step(node, kind):
 def test_valid_inputs_allow_policy(node):
     node._tick()
     assert node.steps == [10.1]
+
+
+def test_range_dropout_keeps_policy_running_with_last_distance(node):
+    node._on_lpos(lpos(timestamp_sample=1_100_000, dist_bottom_valid=False))
+    node._tick()
+    assert node.steps == [10.1] and node.feedback.range_m == 1.2
 
 
 def test_hold_yields_permanently_on_pilot_takeover(node):
@@ -105,3 +109,8 @@ def test_px4_inputs_reach_real_policy_step_and_enu_output(node):
     assert seen[0][:6] == pytest.approx([1., 0., -.2, .8, 0., 0.], abs=1e-6)
     assert node.cmd[0] == pytest.approx([.5, 0., 0.], abs=1e-6)
     assert node.cmd[1] == pytest.approx(-.2)
+    # The startup rf_max default must not falsely mark a grounded vehicle airborne.
+    node.airborne = False
+    node.feedback.range_m, node.feedback.range_t = 4., None
+    type(node)._step(node, 10.2)
+    assert not node.airborne

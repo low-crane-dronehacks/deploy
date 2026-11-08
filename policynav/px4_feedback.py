@@ -5,9 +5,11 @@ import numpy as np
 
 
 class Px4Feedback:
-    def __init__(self, timeout_s=0.5):
+    def __init__(self, timeout_s=0.5, rf_max=4.0):
         self.timeout_s = timeout_s
-        self.vel = self.q = self.range_m = None
+        self.vel = self.q = None
+        self.range_m = float(rf_max)  # until the first valid range; later gaps retain the last valid value
+        self.range_t = None
         self.lpos_t = self.att_t = None
         self.fault = None
         self._samples = {}
@@ -36,16 +38,15 @@ class Px4Feedback:
         range_ok = m.dist_bottom_valid and math.isfinite(m.dist_bottom) and m.dist_bottom > 0
         if not valid:
             self.vel = None
-        if not range_ok:
-            self.range_m = None
-        if active and (not valid or not range_ok):
-            self.fault = 'PX4 velocity/heading or downward distance invalid'
+        if active and not valid:
+            self.fault = 'PX4 velocity/heading invalid'
         if not self._sample('local position', m.timestamp_sample,
                             (m.vxy_reset_counter, m.vz_reset_counter, m.heading_reset_counter), now, active):
             return
         self.lpos_t = now
         self.vel = np.asarray(velocity) if valid else None
-        self.range_m = float(m.dist_bottom) if range_ok else None
+        if range_ok:
+            self.range_m, self.range_t = float(m.dist_bottom), now
 
     def on_att(self, m, now, active=False):
         q = np.asarray(m.q, dtype=float)

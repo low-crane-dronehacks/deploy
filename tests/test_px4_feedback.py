@@ -40,8 +40,7 @@ def test_px4_ned_velocity_and_frd_attitude_reach_policy_without_ros_conversion()
 
 
 @pytest.mark.parametrize('change', [dict(v_xy_valid=False), dict(v_z_valid=False),
-    dict(heading_good_for_control=False), dict(vx=math.nan), dict(dist_bottom_valid=False),
-    dict(dist_bottom=math.nan), dict(dist_bottom=0.)])
+    dict(heading_good_for_control=False), dict(vx=math.nan)])
 def test_invalid_input_immediately_blocks_policy_and_latches_during_flight(change):
     f = ready()
     f.on_lpos(lpos(timestamp_sample=1_100_000, **change), 10.1, active=True)
@@ -50,12 +49,33 @@ def test_invalid_input_immediately_blocks_policy_and_latches_during_flight(chang
     assert f.error(10.2, .5)
 
 
-def test_no_altitude_fallback_and_preflight_input_can_recover():
+@pytest.mark.parametrize('change', [dict(dist_bottom_valid=False), dict(dist_bottom=math.nan), dict(dist_bottom=0.)])
+def test_invalid_range_retains_last_valid_reading_during_flight(change):
     f = ready()
-    f.on_lpos(lpos(timestamp_sample=1_100_000, dist_bottom_valid=False), 10.1)
-    assert f.range_m is None and f.error(10.1, .5)
+    f.on_lpos(lpos(timestamp_sample=1_100_000, **change), 10.1, active=True)
+    assert f.range_m == 1.2 and f.range_t == 10.
+    assert f.error(10.1, .5) is None
     f.on_lpos(lpos(timestamp_sample=1_200_000), 10.2)
     assert f.error(10.2, .5) is None
+
+
+def test_range_before_first_valid_sample_is_rf_max():
+    f = Px4Feedback(rf_max=4.)
+    f.on_lpos(lpos(dist_bottom_valid=False), 10.)
+    f.on_att(att(), 10.)
+    assert f.range_m == 4. and f.range_t is None
+    assert f.error(10., .5) is None
+
+
+def test_range_stays_cached_through_long_dropout_but_state_must_stay_fresh():
+    f = ready()
+    for i in range(1, 21):
+        stamp = 1_000_000 + i * 100_000
+        f.on_lpos(lpos(timestamp_sample=stamp, dist_bottom_valid=False), 10. + i*.1, active=True)
+        f.on_att(att(timestamp_sample=stamp), 10. + i*.1, active=True)
+    assert f.range_m == 1.2 and f.range_t == 10.
+    assert f.error(12., .5) is None
+    assert f.error(13., .5)
 
 
 @pytest.mark.parametrize('stream', ['lpos', 'att'])

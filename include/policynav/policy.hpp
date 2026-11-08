@@ -23,6 +23,7 @@ struct PolicyMeta {
   int depth_h = 80, depth_w = 128;
   Vec3 v_max{5.0, 3.0, 2.0};
   Vec3 v_obs_scale{5.0, 3.0, 2.0};  // fixed training scale, including legacy exports
+  int edge_fill_cols = 0;
   double yaw_rate_max = 1.0, far_clip = 5.0, hfov_deg = 72.0, vfov_deg = 50.0, rf_max = 4.0;
   std::string json;   // the raw 'meta' entry
 };

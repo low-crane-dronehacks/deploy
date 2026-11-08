@@ -161,7 +161,8 @@ class PolicyNav(Node):
             H, W = self.meta['depth_hw']
             self.reproj = O.DepthReprojector(self.K, self.src_hw, R, (t.x, t.y, t.z), out_hw=(H, W),
                                              hfov_deg=self.meta['hfov_deg'], vfov_deg=self.meta['vfov_deg'],
-                                             far=self.meta['far_clip'], stride=2)
+                                             far=self.meta['far_clip'], stride=2,
+                                             edge_fill_cols=self.meta['edge_fill_cols'])
             self.get_logger().info(f'depth calibration: optical axis {self.reproj.axis_err_deg:.1f} deg off body x, '
                                    f't=({t.x:.3f},{t.y:.3f},{t.z:.3f})')
         try:

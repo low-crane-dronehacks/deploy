@@ -161,26 +161,29 @@ To have it start with the stack, set these in `/etc/skybeta/drone.env` and resta
 Same pilot procedure as section 5. Handheld bench (section 3) first.
 Handheld still uses cuVSLAM state; it does not verify the flying policy's PX4 inputs. Before a
 separately approved policy flight, confirm PX4 `vehicle_local_position` velocity/heading validity
-and positive, valid `dist_bottom`, plus fresh `vehicle_attitude`. The flying policy requires both
+and inspect `dist_bottom`, plus fresh `vehicle_attitude`. Invalid range retains the last valid reading;
+before the first valid reading it uses 4 m. Check `range_age_s` to distinguish held range from live readings.
+The flying policy requires both
 streams within `feedback_lost_s` (default 0.5 s), with no altitude fallback. Confirm `/skybeta/state`
 publishes JSON booleans `armed` and `offboard_active` more frequently than `state_lost_s` (0.5 s).
 `/policynav/status` reports `feedback_error`, `lpos_age_s`, `attitude_age_s`, and `state_age_s`.
 
 For a props-off stereo check, compare the normal handheld launch with `swap_eyes:=true` only if physical
-eye ordering/calibration suggests reversed inputs. This swaps image and camera-info namespaces together.
+images are mislabelled relative to correctly labelled calibration. This swaps images only; camera-info and TF stay fixed.
 Verify a known-distance object on each side of the view; an invalid band on the right alone is not proof
 of swapped eyes. Nonpositive/nonfinite baselines now prevent depth output instead of merely logging a
-warning. No edge fill is enabled. The policy default remains `anneal_slow_b128_3255.npz`.
+warning. The policy default is `c5_s164_1575.npz`, with 16-column edge filling enabled in its metadata.
 V5 is included and can be inspected without commands using
 `ros2 launch policynav skybeta.launch.py mode:=handheld policy:=policies/c5_s164_1575.npz`.
-Its reported simulation results used edge filling, which is not enabled here; this is a preprocessing
-mismatch, not a validated reproduction of those results.
+Older policies retain their no-fill preprocessing. These bench checks do not validate the reported simulation success rates.
 
 Check the selected policy's exported `v_obs_scale`: this policy family uses `[5, 3, 2]` despite action
 limits of `[1.2, 0.6, 0.6]`. Missing scale metadata uses `[5, 3, 2]` with a Python warning; malformed scales
 are rejected. Python and C++ now both use the observation scale. Offline verification covers synthetic
-Python/C++ parity, not ROS topic delivery or actual VPI output. Invalid range currently holds the flying
-policy; matching training's lost-range value and camera-rate frame stacking remain follow-up work.
+Python/C++ parity, not ROS topic delivery or actual VPI output. The stack advances at 10 Hz inference;
+the [training review](https://github.com/low-crane-dronehacks/deploy/pull/1#issuecomment-6719561536)
+reports that training also takes the latest delayed frame at each policy tick. Camera-rate stacking
+is not an established requirement; do not change it without checking the training implementation.
 
 ## 7. Watching it live: Foxglove on your laptop
 

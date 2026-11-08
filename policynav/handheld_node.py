@@ -162,7 +162,8 @@ class Handheld(Node):
             H_, W_ = self.meta['depth_hw']
             self.reproj = O.DepthReprojector(self.K, self.src_hw, O.quat_to_mat(r.w, r.x, r.y, r.z), (t.x, t.y, t.z),
                                              out_hw=(H_, W_), hfov_deg=self.meta['hfov_deg'],
-                                             vfov_deg=self.meta['vfov_deg'], far=self.meta['far_clip'], stride=2)
+                                             vfov_deg=self.meta['vfov_deg'], far=self.meta['far_clip'], stride=2,
+                                             edge_fill_cols=self.meta['edge_fill_cols'])
             self.get_logger().info(f'depth calibration: optical axis {self.reproj.axis_err_deg:.1f} deg off body x')
         try:
             t_rx = self._now()

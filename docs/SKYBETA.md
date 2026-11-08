@@ -41,11 +41,13 @@ The flying policy reads PX4 1.16's unsuffixed `/fmu/out/vehicle_local_position` 
 and `dist_bottom`, and `/fmu/out/vehicle_attitude` for the FRD-to-NED quaternion. Velocity is rotated
 into body FRD for the observation; the same quaternion supplies roll/pitch and the heading used to
 rotate actions. It does not subscribe to cuVSLAM odometry. `dist_bottom` is PX4's estimated distance
-to the bottom surface, not a raw rangefinder sample; it must be valid, finite and positive. There is
-no fallback to takeoff-relative altitude or a constant range.
+to the bottom surface, not a raw rangefinder sample. Only valid, finite, positive readings update the
+cached distance. Invalid readings retain the last valid distance indefinitely; before the first valid
+reading, the policy uses `rf_max` (4 m). There is no takeoff-relative altitude fallback. Status includes
+`range_age_s` (null before the first valid reading); range freshness is separate from PX4 stream freshness.
 
 `feedback_lost_s` defaults to 0.5 s for each PX4 stream. Repeated sample timestamps do not refresh
-the watchdog. Invalid velocity/heading, invalid range, invalid attitude, estimator reset counters,
+the watchdog. Invalid velocity/heading, invalid attitude, estimator reset counters,
 sample-time reversal or a feedback gap during flight latch a hold, even if valid feedback returns
 before the next decision. `state_lost_s` defaults to 0.5 s; stale interface state, disarming, or
 leaving Offboard stops publications permanently, including from hold. Startup requires fresh PX4
@@ -65,11 +67,12 @@ ros2 launch policynav skybeta.launch.py mode:=handheld      # props OFF first
 ```
 
 ## Runtime and transport (`launch/skybeta.launch.py`)
-`swap_eyes:=true` swaps both image and camera-info namespaces for either stereo backend. Use it only
-after checking physical eye ordering/calibration on the bench; a right-edge invalid band alone does
-not prove the eyes are reversed. Stereo setup rejects nonpositive/nonfinite horizontal or rectified
+`swap_eyes:=true` swaps image namespaces only for either stereo backend, retaining camera-info and TF.
+It corrects mislabelled images when calibration is correctly labelled; confirm that condition on the bench.
+A right-edge invalid band alone does not prove it. Stereo setup rejects nonpositive/nonfinite horizontal or rectified
 baselines instead of continuing with an absolute baseline. The SGBM node fails setup; VPI withholds
-depth while reporting the error. Edge filling is not enabled: invalid policy pixels remain near.
+depth while reporting the error. The default v5 policy enables 16-column edge filling through its metadata;
+older policies default to no filling. Python and C++ use the same bounded, inward-neighbor fill.
 
 What the launch adds around the nodes, and why. Everything here applies to **our** nodes only (`vpi_stereo`,
 `stereo_depth`, `skybeta_policy`, `handheld`). `flight_interface` keeps skybeta's environment, nice 0, no pinning.

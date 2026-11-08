@@ -20,6 +20,8 @@ Update them when you change what they describe.
 ## Conventions (what the policy expects; see policynav/obs.py)
 - Depth: OAK depth (16UC1 mm, 0 = invalid) is re-projected into the training camera (128x80, 72x50 deg,
   looking along body x). Invalid -> near; a simulator's +inf (no return in range) -> far.
+  Exception: policies trained with `edge_fill_cols` (v5: 16) fill invalid outer columns from valid inward
+  neighbors. This is metadata-controlled, not a global preprocessing default.
 - State: PX4 vehicle_local_position_v1 velocity (NED) and vehicle_attitude (FRD->NED, w first).
 - Action: [fwd, right, down, yaw_rate] in [-1,1] x v_max in the yaw-aligned frame -> TrajectorySetpoint
   velocity (NED) + yawspeed, Offboard velocity mode, 10 Hz decisions, 20 Hz stream.

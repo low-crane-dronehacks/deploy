@@ -62,7 +62,7 @@ class Skybeta(Node):
         self.depth_stale_s, self.depth_lost_s = float(dp('depth_stale_s', 0.5)), float(dp('depth_lost_s', 2.0))
         self.feedback_lost_s = float(dp('feedback_lost_s', 0.5))
         self.state_lost_s = float(dp('state_lost_s', 0.5))
-        self.feedback = Px4Feedback(self.feedback_lost_s)
+        self.feedback = Px4Feedback(self.feedback_lost_s, self.meta['rf_max'])
         self.twist_frame = dp('twist_frame', 'odom')
         self.base_frame = dp('base_frame', 'base_link')
         mismatch = [round(float(v), 2) for v in self.v_max]
@@ -143,7 +143,8 @@ class Skybeta(Node):
             Hh, Ww = self.meta['depth_hw']
             self.reproj = O.DepthReprojector(self.K, self.src_hw, O.quat_to_mat(r.w, r.x, r.y, r.z), (t.x, t.y, t.z),
                                              out_hw=(Hh, Ww), hfov_deg=self.meta['hfov_deg'],
-                                             vfov_deg=self.meta['vfov_deg'], far=self.meta['far_clip'], stride=2)
+                                             vfov_deg=self.meta['vfov_deg'], far=self.meta['far_clip'], stride=2,
+                                             edge_fill_cols=self.meta['edge_fill_cols'])
             self.get_logger().info(f'depth calibration: optical axis {self.reproj.axis_err_deg:.1f} deg off body x')
         try:
             self.depth_img = self.reproj(decode_depth(m))
@@ -200,7 +201,7 @@ class Skybeta(Node):
 
     def _step(self, t):
         rng = self._range()
-        self.airborne |= rng > 0.3
+        self.airborne |= self.feedback.range_t is not None and rng > 0.3
         if self.airborne and rng < 0.12 and np.linalg.norm(self.feedback.vel) < 0.3:
             self._hold('touched down')
             return
@@ -232,6 +233,7 @@ class Skybeta(Node):
               'cmd_enu': [round(vx, 2), round(vy, 2), round(vz, 2)], 'yaw_rate': round(wz, 2),
               'range_m': None if self._range() is None else round(self._range(), 2), 'airborne': self.airborne,
               'feedback_error': self.feedback.error(self._now(), self.feedback_lost_s),
+              'range_age_s': None if self.feedback.range_t is None else round(self._now() - self.feedback.range_t, 2),
               'lpos_age_s': None if self.feedback.lpos_t is None else round(self._now() - self.feedback.lpos_t, 2),
               'attitude_age_s': None if self.feedback.att_t is None else round(self._now() - self.feedback.att_t, 2),
               'state_age_s': None if self.state_t is None else round(self._now() - self.state_t, 2),

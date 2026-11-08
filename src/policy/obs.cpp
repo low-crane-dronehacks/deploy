@@ -129,10 +129,24 @@ void DepthReprojector::operator()(const float* depth_m, float* out) const {
       }
     }
   }
+  std::vector<unsigned char> vmask(n_out);
   for (std::size_t i = 0; i < n_out; ++i) {
     const double mean = zsum[i] / double(std::max<std::int64_t>(n_ok[i], 1));
     const bool valid = (double(n_ok[i]) >= p_.min_valid * double(std::max<std::int64_t>(n_all[i], 1))) && n_ok[i] > 0;
     out[i] = valid ? float(std::max(0.0, std::min(1.0, mean / p_.far))) : 0.0f;   // invalid -> near
+    vmask[i] = valid;
+  }
+  const int n = std::max(0, std::min(p_.edge_fill_cols, W / 2));
+  for (int r = 0; r < H; ++r) {
+    const std::size_t row = std::size_t(r) * W;
+    auto fill = [&](int c, int src) {
+      if (!vmask[row + c] && vmask[row + src]) {
+        out[row + c] = out[row + src];
+        vmask[row + c] = 1;
+      }
+    };
+    for (int c = W - n; c < W; ++c) fill(c, c - 1);
+    for (int c = n - 1; c >= 0; --c) fill(c, c + 1);
   }
 }
 

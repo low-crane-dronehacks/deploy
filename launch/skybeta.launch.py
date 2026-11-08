@@ -37,9 +37,9 @@ ARGUMENTS = [
                             "ignores the Offboard request on a mismatch, and flight_interface's own default is 1"),
     # ours
     ('mode', 'fly', 'fly | handheld (props off: no flight interface, no setpoints)'),
-    ('policy', 'policies/anneal_slow_b128_3255.npz', 'exported policy (.npz), relative to the package share'),
+    ('policy', 'policies/c5_s164_1575.npz', 'exported policy (.npz), relative to the package share'),
     ('stereo_backend', 'vpi', 'vpi (C++ vpi_stereo, CUDA census+SGM) | sgbm (OpenCV, CPU, ~29 ms at 640x400 on 6 cores)'),
-    ('swap_eyes', 'false', 'swap both stereo image and calibration inputs; verify physical eye ordering on the bench'),
+    ('swap_eyes', 'false', 'swap stereo images only when image labels disagree with correct calibration; verify on the bench'),
     ('max_disparity', '96', 'stereo search range at 640 px: min range = f*B/max (~0.33 m at 96, 0.40 m at 80)'),
     ('depth_rate_hz', '13.5', 'stereo rate, averaged by camera stamps (training models 13.5-15 Hz frames)'),
     ('speed_cap', '1.45', 'our own cap on |v| (m/s), under the interface clamp'),
@@ -117,8 +117,9 @@ def nodes(context):
     if swap not in ('true', 'false', '1', '0', 'yes', 'no'):
         raise ValueError('swap_eyes must be true or false')
     swap = swap in ('true', '1', 'yes')
-    eyes = {'left_ns': '/oak/right' if swap else '/oak/left',
-            'right_ns': '/oak/left' if swap else '/oak/right'}
+    eyes = {'left_ns': '/oak/left', 'right_ns': '/oak/right',
+            'left_image_ns': '/oak/right' if swap else '/oak/left',
+            'right_image_ns': '/oak/left' if swap else '/oak/right'}
     flight_interface = Node(
         package='skybeta_flight_interface', executable='flight_interface', name='flight_interface',
         output='screen', emulate_tty=True, condition=fly,

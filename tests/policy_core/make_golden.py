@@ -78,7 +78,7 @@ def main(policy_path, out_path, *depth_files):
     reps = []
     for i in range(len(cfgs)):
         rp = O.DepthReprojector(tuple(K[i]), (Hs, Ws), R[i], T[i], out_hw=(Hh, Ww), hfov_deg=meta['hfov_deg'],
-                                vfov_deg=meta['vfov_deg'], far=meta['far_clip'], stride=int(S[i]))
+                                vfov_deg=meta['vfov_deg'], far=meta['far_clip'], stride=int(S[i]), edge_fill_cols=meta['edge_fill_cols'])
         reps.append(rp)
         axis_err[i] = rp.axis_err_deg
         for f in range(len(frames)):

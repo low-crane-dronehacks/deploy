@@ -54,6 +54,9 @@ class NumpyPolicy:
         scale = np.asarray(self.meta['v_obs_scale'], dtype=float)
         if scale.shape != (3,) or not np.isfinite(scale).all() or np.any(scale <= 0):
             raise ValueError('v_obs_scale must contain three finite positive values')
+        fill = self.meta.setdefault('edge_fill_cols', 0)
+        if type(fill) is not int or not 0 <= fill <= self.meta['depth_hw'][1] // 2:
+            raise ValueError('edge_fill_cols must be an integer between 0 and half the depth width')
         self.conv = [(z[f'conv{i}_w'], z[f'conv{i}_b'], tuple(z[f'conv{i}_stride']), tuple(z[f'conv{i}_pad']),
                       bool(z[f'conv{i}_pool'])) for i in range(self.meta['n_conv'])]
         self.gru = {k: z['gru_' + k] for k in ('w_ih', 'w_hh', 'b_ih', 'b_hh')}

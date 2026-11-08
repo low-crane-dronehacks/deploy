@@ -102,6 +102,8 @@ class VpiStereo : public rclcpp::Node {
     slop_s_ = declare_parameter<double>("sync_slop_s", 0.005);
     const std::string ns_l = declare_parameter<std::string>("left_ns", "/oak/left");
     const std::string ns_r = declare_parameter<std::string>("right_ns", "/oak/right");
+    const std::string img_l = declare_parameter<std::string>("left_image_ns", ns_l);
+    const std::string img_r = declare_parameter<std::string>("right_image_ns", ns_r);
     const std::string img = declare_parameter<std::string>("image_topic", "image_mono");
     auto qos = rclcpp::SensorDataQoS();
     sub_info_l_ = create_subscription<CameraInfo>(ns_l + "/camera_info", qos, [this](CameraInfo::ConstSharedPtr m) {
@@ -110,12 +112,12 @@ class VpiStereo : public rclcpp::Node {
     sub_info_r_ = create_subscription<CameraInfo>(ns_r + "/camera_info", qos, [this](CameraInfo::ConstSharedPtr m) {
       if (!info_r_ && m->k[0] > 0) info_r_ = m;
     });
-    sub_l_ = create_subscription<Image>(ns_l + "/" + img, qos, [this](Image::ConstSharedPtr m) {
+    sub_l_ = create_subscription<Image>(img_l + "/" + img, qos, [this](Image::ConstSharedPtr m) {
       times_.add("0 camera->rx left (age)", 1e3 * (now().seconds() - stamp_s(m->header.stamp)));
       left_ = m;
       try_pair();
     });
-    sub_r_ = create_subscription<Image>(ns_r + "/" + img, qos, [this](Image::ConstSharedPtr m) {
+    sub_r_ = create_subscription<Image>(img_r + "/" + img, qos, [this](Image::ConstSharedPtr m) {
       times_.add("0 camera->rx right (age)", 1e3 * (now().seconds() - stamp_s(m->header.stamp)));
       right_ = m;
       try_pair();

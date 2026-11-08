@@ -6,7 +6,8 @@ Reproduces what the policy saw in training (dronehacks/env.py):
            re-projected into that virtual camera through its CameraInfo + TF, block-averaged over valid returns;
            a policy pixel with < min_valid of its source pixels valid is INVALID and reads as near (0.0): an
            invalid pixel must never look like open space (the camera is inside its 0.35 m minimum range on the
-           ground at takeoff).
+           ground at takeoff). Policies explicitly trained with edge filling may opt in through metadata;
+           invalid outer columns then copy valid inward neighbors. Unseeded regions remain near.
   proprio  [body-frame velocity / v_max (3), downward range / 1.5 (1), roll, pitch (2), previous action (A)]
   action   [forward, right, down, yaw_rate] in [-1, 1] in the yaw-aligned body frame, x v_max / yaw_rate_max
            (+ a 5th 'complete' output for handoff policies) -> PX4 NED velocity + yawspeed setpoint.
@@ -35,13 +36,14 @@ class DepthReprojector:
     """Maps the real depth image onto the training camera's grid. Built once per (CameraInfo, TF)."""
 
     def __init__(self, K, src_hw, R_body_cam, t_body_cam, out_hw=(80, 128), hfov_deg=72.0, vfov_deg=50.0,
-                 far=5.0, min_valid=0.5, stride=1):
+                 far=5.0, min_valid=0.5, stride=1, edge_fill_cols=0):
         """K = (fx, fy, cx, cy) of the source image; R_body_cam / t_body_cam: optical frame (x right, y down,
         z forward) -> body FLU, as TF base_link <- camera gives them."""
         fx, fy, cx, cy = K
         Hs, Ws = src_hw
         H, W = out_hw
         self.H, self.W, self.far, self.min_valid, self.stride = H, W, far, min_valid, stride
+        self.edge_fill_cols = edge_fill_cols
         vs, us = np.mgrid[0:Hs:stride, 0:Ws:stride]
         rays_cam = np.stack([(us + 0.5 - cx) / fx, (vs + 0.5 - cy) / fy, np.ones(us.shape)], -1).reshape(-1, 3)
         flu_to_frd = np.diag([1.0, -1.0, -1.0])
@@ -72,7 +74,27 @@ class DepthReprojector:
         mean = zsum / np.maximum(n_ok, 1)
         valid = (n_ok >= self.min_valid * np.maximum(n_all, 1)) & (n_ok > 0)
         out = np.where(valid, np.clip(mean / self.far, 0.0, 1.0), 0.0)                # invalid -> near
-        return out.reshape(self.H, self.W).astype(np.float32)
+        out, _ = edge_fill(out.reshape(self.H, self.W), valid.reshape(self.H, self.W), self.edge_fill_cols)
+        return out.astype(np.float32)
+
+
+def edge_fill(out, valid, n):
+    """Copy valid inward neighbors into invalid edge cells for policies trained with this fill.
+
+    Right edge left-to-right, then left edge right-to-left; unseeded bands stay invalid.
+    Bound the width identically to C++. Zero preserves the legacy invalid-near contract.
+    """
+    n = max(0, min(int(n), out.shape[-1] // 2))
+    if not n:
+        return out, valid
+    out, valid = out.copy(), valid.copy()
+    w = out.shape[-1]
+    for c in list(range(w - n, w)) + list(range(n - 1, -1, -1)):
+        src = c - 1 if c >= w - n else c + 1
+        take = ~valid[..., c] & valid[..., src]
+        out[..., c] = np.where(take, out[..., src], out[..., c])
+        valid[..., c] |= valid[..., src]
+    return out, valid
 
 
 class FrameStack:

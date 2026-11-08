@@ -51,6 +51,7 @@ class DepthReprojector {
     double hfov_deg = 72.0, vfov_deg = 50.0;
     double far = 5.0, min_valid = 0.5;
     int stride = 1;   // the nodes use 2
+    int edge_fill_cols = 0;  // opt-in training preprocessing, bounded to half the image
   };
   // K = (fx, fy, cx, cy) of the source image; R_body_cam / t_body_cam: optical frame (x right, y down, z forward)
   // -> body FLU, as TF base_link <- camera gives them.
