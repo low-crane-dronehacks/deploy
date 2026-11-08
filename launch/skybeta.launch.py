@@ -37,7 +37,7 @@ ARGUMENTS = [
                             "ignores the Offboard request on a mismatch, and flight_interface's own default is 1"),
     # ours
     ('mode', 'fly', 'fly | handheld (props off: no flight interface, no setpoints)'),
-    ('policy', 'policies/anneal_slow_b128_3255.npz', 'exported policy (.npz), relative to the package share'),
+    ('policy', 'policies/asbuilt_s115_3050.npz', 'exported policy (.npz), relative to the package share'),
     ('stereo_backend', 'vpi', 'vpi (C++ vpi_stereo, CUDA census+SGM) | sgbm (OpenCV, CPU, ~29 ms at 640x400 on 6 cores)'),
     ('swap_eyes', 'false', 'swap both stereo image and calibration inputs; verify physical eye ordering on the bench'),
     ('max_disparity', '96', 'stereo search range at 640 px: min range = f*B/max (~0.33 m at 96, 0.40 m at 80)'),
