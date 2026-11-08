@@ -1,9 +1,18 @@
 #!/usr/bin/env python3
+"""Standalone direct-PX4 hover test: automatic Offboard/arm, velocity climb, stop, AUTO_LAND.
+
+Uses PX4 fused velocity/heading only; integrates measured down velocity for a relative 1 m
+climb. Hovers with zero velocity for 2 s, then requests landing and confirms ground/disarm.
+No position setpoints or raw VIO inputs. This script commands PX4 directly and must not run
+beside the Skybeta flight interface. Execution can arm a vehicle; operator approval required.
+"""
 
 import math
+from dataclasses import dataclass
 import os
 from pathlib import Path
 import sys
+from typing import Optional, Tuple
 
 # This is ordinary ROS/PX4 code: no runtime, cloud API or mission wrapper.
 # Use the topic versions exported by the installed px4_msgs generation.
@@ -11,22 +20,59 @@ def px4_topic(name, message_type):
     version = int(getattr(message_type, "MESSAGE_VERSION", 0))
     return "/fmu/out/" + name + (f"_v{version}" if version else "")
 
-import rclpy
-from rclpy.node import Node
-from rclpy.qos import (
-    QoSProfile, ReliabilityPolicy,
-    DurabilityPolicy, HistoryPolicy
-)
+try:
+    import rclpy
+    from rclpy.node import Node
+    from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
+    from px4_msgs.msg import (OffboardControlMode, TrajectorySetpoint, VehicleCommand,
+                             VehicleLocalPosition, VehicleStatus, VehicleLandDetected,
+                             EstimatorStatusFlags)
+except ImportError:  # Pure helpers remain testable without ROS.
+    Node = object
 
-from px4_msgs.msg import (
-    OffboardControlMode,
-    TrajectorySetpoint,
-    VehicleCommand,
-    VehicleLocalPosition,
-    VehicleStatus,
-    VehicleLandDetected,
-    EstimatorStatusFlags
-)
+
+def command_system_id(configured, observed):
+    """Use live PX4 system_id (not component_id); never broadcast or address another vehicle."""
+    if not 1 <= observed <= 255:
+        raise ValueError('PX4 system_id is missing or invalid')
+    if configured not in (0, observed):
+        raise ValueError(f'target_system {configured} disagrees with PX4 system_id {observed}')
+    return observed
+
+
+@dataclass
+class VerticalTravel:
+    """Relative climb from measured PX4 down velocity. No absolute position is consumed."""
+    rise_m: float = 0.0
+    last_sample: Optional[float] = None
+    last_vz: float = 0.0
+    resets: Optional[Tuple[int, int, int]] = None
+
+    def observe(self, sample_s, vz, resets):
+        if not all(math.isfinite(v) for v in (sample_s, vz)) or sample_s <= 0:
+            raise ValueError('invalid PX4 velocity/sample time')
+        if self.last_sample is not None:
+            dt = sample_s - self.last_sample
+            if resets != self.resets or not 0 <= dt <= 1.0:
+                raise ValueError('PX4 estimate reset or sample-time discontinuity')
+            if dt == 0:
+                return
+            self.rise_m -= (self.last_vz + vz) * 0.5 * dt
+        self.last_sample, self.last_vz, self.resets = sample_s, vz, resets
+
+
+def vertical_sample(msg):
+    return (float(msg.timestamp_sample) * 1e-6, float(msg.vz),
+            (int(msg.vxy_reset_counter), int(msg.vz_reset_counter), int(msg.heading_reset_counter)))
+
+
+def climb_velocity(rise_m):
+    """NED velocity: upward speed tapers to zero near the integrated 1 m climb target."""
+    remaining = HEIGHT - rise_m
+    if remaining <= 0.1:
+        return 0.0
+    return -min(0.5, math.sqrt(remaining), remaining / 0.1)
+
 
 HEIGHT = 1.0       # Takeoff height in meters
 HOVER_TIME = 2.0   # Seconds to hover before landing
@@ -92,15 +138,30 @@ class TakeoffLand(Node):
             raise ValueError("preflight_timeout_s must be finite and positive")
         self.last_command = 0.0
 
-        self.x = self.y = self.z = self.yaw = 0.0
-        self.target_z = 0.0
+        self.travel = VerticalTravel()
+        self.velocity_fault = None
+        # 0 means discover from live VehicleStatus, NOT broadcast to system 0.
+        self.command_target = None  # Latch one vehicle at priming; never silently switch targets.
+        self.target_system = int(self.declare_parameter("target_system", 0).value)
+        if not 0 <= self.target_system <= 255:
+            raise ValueError("target_system must be 0 (discover) or 1..255")
 
         # Control loop at 10 Hz
         self.create_timer(0.1, self.tick)
 
     def on_position(self, msg):
+        # Repeated samples must not keep a dead estimator artificially fresh.
+        repeated = self.pos is not None and msg.timestamp_sample == self.pos.timestamp_sample
         self.pos = msg
-        self.pos_time = self.clock_seconds()
+        if not repeated:
+            self.pos_time = self.clock_seconds()
+        if self.phase in ("CLIMB", "HOVER"):
+            if not self.feedback_ready(self.clock_seconds()):
+                self.velocity_fault = "invalid PX4 velocity/heading"
+            try:
+                self.travel.observe(*vertical_sample(msg))
+            except ValueError as exc:
+                self.velocity_fault = str(exc)
 
     def on_status(self, msg):
         self.status = msg
@@ -115,7 +176,7 @@ class TakeoffLand(Node):
         self.yaw_alignment_time = self.clock_seconds()
         self.yaw_alignment_timestamp = int(msg.timestamp)
 
-    def position_ready(self, now):
+    def feedback_ready(self, now):
         if self.pos is None:
             return False
         # PX4's compass final-heading flag waits for an in-flight alignment.
@@ -127,10 +188,11 @@ class TakeoffLand(Node):
                    and 0 <= now - self.yaw_alignment_time <= 3.0
                    and self.yaw_alignment_timestamp > 0
                    and 0 <= flags_age_us <= 3_000_000)
-        return bool(self.pos.xy_valid and self.pos.z_valid
+        return bool(self.pos.v_xy_valid and self.pos.v_z_valid
                     and (self.pos.heading_good_for_control or aligned)
+                    and self.pos.timestamp_sample > 0
                     and all(math.isfinite(value) for value in
-                            (self.pos.x, self.pos.y, self.pos.z, self.pos.heading)))
+                            (self.pos.vx, self.pos.vy, self.pos.vz, self.pos.heading)))
 
     def clock_seconds(self):
         # Standard ROS time: hardware uses system time; deployment selects
@@ -146,27 +208,36 @@ class TakeoffLand(Node):
         msg.command = cmd
         msg.param1 = float(p1)
         msg.param2 = float(p2)
-        msg.target_system = 1
+        try:
+            msg.target_system = command_system_id(self.command_target or self.target_system,
+                                                   int(self.status.system_id) if self.status else 0)
+        except ValueError as exc:
+            self.get_logger().error(str(exc))
+            return False
         msg.target_component = 1
-        msg.source_system = 1
+        msg.source_system = msg.target_system
         msg.source_component = 1
         msg.from_external = True
         self.command_pub.publish(msg)
+        return True
 
     def publish_setpoint(self):
-        # Tell PX4 we're controlling position
+        # PX4 owns the velocity controller and all sensor fusion. No position targets.
         mode = OffboardControlMode()
         mode.timestamp = self.timestamp()
-        mode.position = True
+        mode.position = False
+        mode.velocity = True
         self.offboard_pub.publish(mode)
 
         # PX4 uses NED coordinates: negative Z is UP
         sp = TrajectorySetpoint()
         sp.timestamp = self.timestamp()
-        sp.position = [self.x, self.y, self.target_z]
-        sp.velocity = [math.nan] * 3
+        sp.position = [math.nan] * 3
+        # Horizontal zero is body-relative zero at any heading; vertical is gravity-aligned.
+        sp.velocity = [0.0, 0.0, climb_velocity(self.travel.rise_m) if self.phase == "CLIMB" else 0.0]
         sp.acceleration = [math.nan] * 3
-        sp.yaw = self.yaw
+        sp.yaw = math.nan
+        sp.yawspeed = 0.0
         self.setpoint_pub.publish(sp)
 
     def begin_landing(self):
@@ -190,11 +261,11 @@ class TakeoffLand(Node):
         if self.wait_started is None:
             self.wait_started = now
         if self.phase in ("WAIT", "PRIME") and now - self.wait_started >= self.preflight_timeout_s:
-            self.get_logger().error("Preflight timeout: no fresh valid PX4 position/heading; no arm request sent")
+            self.get_logger().error("Preflight timeout: no fresh valid PX4 velocity/heading/system ID; no arm request sent")
             self.phase = "ABORT"
             return
 
-        # Wait for position and status telemetry
+        # Wait for fused local velocity and status telemetry
         if self.pos is None or self.status is None:
             return
 
@@ -218,10 +289,20 @@ class TakeoffLand(Node):
             self.phase = "ABORT"
             return
 
+        if self.command_target is not None and self.status.system_id != self.command_target:
+            self.get_logger().error("PX4 system_id changed: yielding without further commands")
+            self.phase = "ABORT"
+            return
+
         if self.phase == "PRIME" and armed:
             self.get_logger().warning("Vehicle armed before our request; yielding control")
             self.phase = "ABORT"
             return
+
+        if self.phase in ("ACTIVATE", "CLIMB", "HOVER") and armed and offboard:
+            if self.velocity_fault or not self.feedback_ready(now):
+                self.get_logger().error("PX4 velocity/heading invalid: landing; " + str(self.velocity_fault or "validity flags"))
+                self.begin_landing()
 
         if self.phase == "LAND":
             if armed and self.ground_confirmation_started is not None:
@@ -277,47 +358,51 @@ class TakeoffLand(Node):
             return
 
         if self.phase == "WAIT":
-            if armed or not self.position_ready(now):
+            if armed or not self.feedback_ready(now):
                 if now - self.last_wait_log >= 5.0:
-                    self.get_logger().info("Waiting for valid position and fresh PX4 heading/yaw alignment")
+                    self.get_logger().info("Waiting for valid PX4 velocity and fresh heading/yaw alignment")
                     self.last_wait_log = now
                 return
 
-            # Record the current position as our starting point
-            self.x = float(self.pos.x)
-            self.y = float(self.pos.y)
-            self.z = float(self.pos.z)
-            self.yaw = float(self.pos.heading)
-            self.target_z = self.z - HEIGHT
-
-            self.get_logger().info("Position valid; priming Offboard")
+            try:
+                system_id = command_system_id(self.target_system, int(self.status.system_id))
+            except ValueError as exc:
+                if now - self.last_wait_log >= 5.0:
+                    self.get_logger().error(str(exc))
+                    self.last_wait_log = now
+                return
+            self.command_target = system_id
+            self.get_logger().info(f"PX4 fused velocity valid; system_id={system_id}; priming Offboard")
             self.phase = "PRIME"
             self.phase_start = now
 
-        if self.phase == "PRIME" and not self.position_ready(now):
-            self.get_logger().warning("Position/heading lost while priming; withholding arm request")
+        if self.phase == "PRIME" and not self.feedback_ready(now):
+            self.get_logger().warning("Velocity/heading lost while priming; withholding arm request")
             self.phase = "WAIT"
             return
 
-        # Continuously send Offboard heartbeat and position target
+        # Continuously send Offboard heartbeat and velocity target (zero until activated).
         self.publish_setpoint()
 
         if self.phase == "PRIME":
             # PX4 needs over 1 second of Offboard heartbeats
             if now - self.phase_start >= 2.0:
-                self.command(
-                    VehicleCommand.VEHICLE_CMD_DO_SET_MODE, 1.0, 6.0
-                )
-                self.command(
-                    VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM, 1.0
-                )
+                if not self.command(VehicleCommand.VEHICLE_CMD_DO_SET_MODE, 1.0, 6.0):
+                    self.phase = "ABORT"
+                    return
+                if not self.command(VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM, 1.0):
+                    self.phase = "ABORT"
+                    return
                 self.get_logger().info("Offboard and arm requested")
                 self.phase = "ACTIVATE"
                 self.phase_start = now
 
         elif self.phase == "ACTIVATE":
             if armed and offboard:
-                self.get_logger().info("Armed; climbing")
+                self.travel = VerticalTravel()
+                self.travel.observe(*vertical_sample(self.pos))
+                self.velocity_fault = None
+                self.get_logger().info("Armed; climbing using integrated PX4 fused velocity")
                 self.phase = "CLIMB"
                 self.phase_start = now
             elif now - self.phase_start > 8.0:
@@ -331,7 +416,7 @@ class TakeoffLand(Node):
             if not armed or not offboard:
                 self.get_logger().error("Offboard control lost")
                 self.phase = "ABORT"
-            elif abs(self.pos.z - self.target_z) < 0.15:
+            elif self.travel.rise_m >= HEIGHT - 0.1:
                 self.get_logger().info("Reached target height")
                 self.phase = "HOVER"
                 self.phase_start = now

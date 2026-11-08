@@ -82,13 +82,36 @@ Other measurement tools:
 ## 5. Scripted test flight: climb, forward, hold (no policy)
 
 `onboard/examples/climb_forward_hold_skybeta.py`:
-- Climbs to `height`.
-- Flies `forward_m` along the heading the drone had when Offboard started.
-- Holds that pose for `hold_s`.
-- Then hovers until the pilot lands. There is no land command.
+- Uses PX4 fused NED velocity and heading from `vehicle_local_position`, not raw VIO odometry.
+- Integrates measured vertical velocity to climb `height` metres above the Offboard-start level.
+- Integrates measured forward velocity to travel `forward_m` metres along the **current** heading.
+  Forward/right are yaw-relative; vertical remains aligned with gravity. Turning changes the forward direction.
+- During forward travel, corrects integrated height using vertical velocity commands.
+- Streams zero velocity for `hold_s`, then continues zero velocity until the pilot lands.
+  This requests stopping, not holding an absolute position. There is no land command.
+
+All mission commands go through `/skybeta/setpoint/twist` in ENU after rotation using PX4 heading.
+No pose setpoints or direct PX4 commands are sent by the mission. Travel is estimated by integrating
+PX4 velocity; bias accumulates, so the distance is approximate. Stage timeouts switch to zero velocity.
+Invalid/stale velocity or heading, estimator resets, or sample-time discontinuities abort to zero velocity;
+Offboard loss stops publishing permanently. The mission never restarts itself.
+
+The organizer interface still owns its safety envelope and its `odometry_topic` configuration; this change
+neither changes EKF2 fusion sources nor disables the organizer's visual-odometry pipeline.
+The altitude envelope applies to pose setpoints, not our velocity commands.
 
 Defaults: `height` 1.0 m, `forward_m` 1.0 m, `climb_speed` / `forward_speed` 0.5 m/s, `hold_s` 5 s.
-`fly:=false` (the default) prints the plan from live odometry and publishes nothing.
+`fly:=false` (the default) prints the plan once valid PX4 feedback arrives and publishes nothing.
+Feedback must have `v_xy_valid`, `v_z_valid`, and `heading_good_for_control` true; this is not a replacement
+for the organizer's pre-flight checks. Its default topic is `/fmu/out/vehicle_local_position` as observed on
+skybeta-17. If the installed message generation uses a suffix, set
+`px4_feedback_topic:=/fmu/out/vehicle_local_position_v1` after checking the live topic type.
+`target_system` defaults to **17**, matching skybeta-17's `vehicle_status.system_id`; override it on other
+vehicles. System ID and component ID are different fields: the observed status was `system_id: 17`,
+`component_id: 1`. Address the system ID in `target_system`; do not substitute the component ID.
+Recheck after a firmware/configuration change with
+`ros2 topic echo /fmu/out/vehicle_status_v1 --once --qos-reliability best_effort`.
+A wrong ID lets the interface read state while its mode commands address the wrong aircraft.
 
 The stack's competitor window launches with no arguments, which would only ever give the dry run. Run it by hand:
 
@@ -104,8 +127,10 @@ cd ~/skybeta && host/run.sh shell
 ros2 launch policynav skybeta_climb_forward.launch.py
 
 # 4. fly (props on, safety pilot on RC, kill switch confirmed, team approval for this flight)
-ros2 launch policynav skybeta_climb_forward.launch.py fly:=true height:=1.0 forward_m:=1.0
-#    hover only: forward_m:=0.0 (check the dry-run plan line first)
+ros2 launch policynav skybeta_climb_forward.launch.py fly:=true height:=1.0 forward_m:=1.0 target_system:=17
+#    hover only: add forward_m:=0.0 to the same launch (same PX4 feedback and velocity-only code).
+#    Check it without commanding the drone first:
+#    ros2 launch policynav skybeta_climb_forward.launch.py forward_m:=0.0
 ```
 
 Pilot procedure:
@@ -115,7 +140,7 @@ Pilot procedure:
 - Take it back by raising the throttle toward centre or flipping the mode switch.
 - Kill switch: channel 5.
 - The pilot lands it.
-- `forward_m` points along the takeoff heading, so face the drone at open space.
+- `forward_m` follows the current heading, so face the drone at open space and avoid turning during the test.
 
 Record a bag of every flight in a second terminal: `cd ~/skybeta && host/run.sh bag`.
 

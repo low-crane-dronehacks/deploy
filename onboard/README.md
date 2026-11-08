@@ -2,6 +2,9 @@
 
 ## October29 native application check
 
+Historical acceptance below covers the earlier position-controlled hover revision. The current
+PX4-velocity-only hover change has local tests but has not been flight-tested.
+
 The identical `onboard/examples/takeoff_land.py` now has local isolated-companion
 acceptance: VIO off safely refuses twice; actual cuVSLAM/EV services on complete
 takeoff, hover, AUTO_LAND and confirmed disarm. The native flight grade passes,
@@ -93,6 +96,25 @@ That script directly creates native PX4 publishers/subscribers. It makes no lab
 API calls and imports no mission controller. It requests Offboard and arms a
 vehicle: run only with the required operator authorization and an appropriate
 isolated simulator or reviewed aircraft setup. Its default height is1m.
+
+The current hover test uses **PX4 fused velocity and heading** from `VehicleLocalPosition`, with no
+raw VIO feedback or position setpoints. It primes Offboard with zero velocity, automatically requests
+Offboard and arming, integrates measured vertical velocity for an approximately 1 m climb (speed capped
+at 0.5 m/s), sends zero velocity for 2 s, then requests AUTO_LAND. Horizontal commands are always zero;
+zero is the same in the body and local frames, and vertical remains gravity-aligned. Zero velocity is
+not a fixed-position hold, and integrated height can drift. Bad velocity/heading or a velocity/heading
+reset during climb/hover requests landing; stale telemetry or pilot takeover yields control. Existing
+fresh PX4 yaw-alignment handling remains available when the final-heading flag is not yet set.
+
+`target_system` defaults to `0` **as a discovery setting only**: the script reads and latches the positive
+`system_id` from live `VehicleStatus` before priming. It never sends a command to system 0. Thus a PX4
+reporting system 1 receives commands addressed to 1; skybeta-17's observed system 17 receives commands
+addressed to 17. An explicit `--ros-args -p target_system:=1` requires the reported ID to be 1, otherwise
+arming is withheld. `component_id: 1` is a different field from `system_id`. Once priming starts, an ID
+change aborts the script instead of redirecting commands. This standalone script writes `/fmu/in/*`
+directly; the organizer Skybeta flight path uses `skybeta_climb_forward.launch.py forward_m:=0.0` instead
+and must not run simultaneously with this script.
+
 It resolves native output topic versions from installed `px4_msgs` (`_v1` for
 position/status on this image). Compared with the supplied example, stale
 telemetry also stops landing retries, takeover yields before another setpoint,
@@ -134,9 +156,10 @@ driver, calibration or performance differences.
 Vision publishes ordinary odometry. The visible EV bridge validates frames,
 covariance, reset/freshness and health, then sends `VehicleOdometry` to
 `/fmu/in/vehicle_visual_odometry`. This is external visual odometry, not optical
-flow. PX4 still estimates state and controls the motors. Without GNSS or another
-horizontal estimator, the position-controlled example refuses to arm; forcing
-an attitude-only launch to produce drift would be a different program/test.
+flow. PX4 still estimates state and controls the motors. The hover test consumes PX4's fused output;
+it does not disable or reconfigure any EKF2 sensor inputs. Without a valid fused horizontal/vertical
+velocity estimate and usable heading, it refuses to arm; forcing an attitude-only launch to produce
+drift would be a different program/test.
 
 Real startup heading/frame calibration and PX4 fusion/motor/airframe parameters
 need their own reviewed commissioning. Never copy a simulator parameter preset

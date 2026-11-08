@@ -132,10 +132,22 @@ p95 rises under `nice:=5`, try `nice:=2`, or `cpus:=3-5 nice:=0` (a soft partiti
 more stack threads on 0-2).
 
 ## Scripted test flight (no policy)
-`onboard/examples/climb_forward_hold_skybeta.py` (launch: `skybeta_climb_forward.launch.py`): climb `height`, fly `forward_m`
-along the heading at Offboard start, hold a pose `hold_s`, then hover until the pilot lands. Same plan as
-`climb_forward_hold.py` (which commands PX4 directly: SITL / FlyX only), through the skybeta contract. Dry run by
-default (`fly:=false`: prints the plan from live odometry, publishes nothing).
+`onboard/examples/climb_forward_hold_skybeta.py` (launch: `skybeta_climb_forward.launch.py`) uses **PX4 fused
+velocity and heading** from `VehicleLocalPosition`, not raw cuVSLAM feedback. It integrates measured vertical
+velocity to climb `height`, then measured body-forward velocity to travel `forward_m`, while correcting
+integrated height. Forward follows the current PX4 heading; vertical stays gravity-aligned. The mission
+rotates commands into ENU for `/skybeta/setpoint/twist`, never sends pose setpoints, and never writes `/fmu/in/*`.
+After travel it sends zero velocity for `hold_s`, then continues zero velocity until the pilot lands; this
+is not an absolute-position hold. Distances accumulate velocity-integration error. Invalid/stale feedback,
+velocity/heading resets and sample-time discontinuities abort the mission to zero velocity; loss of Offboard
+stops publishing permanently. It cannot resume itself.
+
+Dry run is the default (`fly:=false`: wait for valid PX4 feedback, print the plan, publish nothing).
+`px4_feedback_topic` defaults to `/fmu/out/vehicle_local_position` as resolved on skybeta-17; override it
+for a version-suffixed topic when necessary. `target_system` defaults to **17**, the observed PX4 system ID
+on this drone; override on other vehicles. Only the organizer interface sends PX4 commands. Its own
+`odometry_topic` and the organizer EKF2 fusion configuration remain unchanged; the mission does not disable
+vision fusion in PX4. See [DRONE_TESTING.md](DRONE_TESTING.md) for readiness and build steps.
 
 ## Known gaps (2026-11-07)
 - **`vpi_stereo` has never been compiled.** There is no VPI or ROS on our dev machines. Expect small fixes at
