@@ -255,7 +255,8 @@ def _setup(context):
                 "-p",
                 f"inject_demo_pillar:={inject_demo_pillar.lower()}",
                 "-p",
-                f"isam2_obstacles_topic:={'/isam2_depth_node/obstacles' if isam2 else ''}",
+                # "''" = empty string; a bare "name:=" makes rcl fail to parse the arguments (node aborts)
+                f"isam2_obstacles_topic:={'/isam2_depth_node/obstacles' if isam2 else repr('')}",
             ]
             + frames,
             cwd=ROOT,
