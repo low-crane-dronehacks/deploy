@@ -4,7 +4,7 @@
 // in   /odometry/local                   nav_msgs/Odometry (odom frame): current pose + speed for replans
 //      /plan/replan_blocked_corridor     geometry_msgs/PointStamped (map frame): block it, replan
 //      TF map -> odom
-// out  /plan/global_rrt                  nav_msgs/Path, map frame, latched, timed pose stamps, one per new plan
+// out  /plan/global_path                  nav_msgs/Path, map frame, latched, timed pose stamps, one per new plan
 //      /viz/groundtruth_map_cloud        sensor_msgs/PointCloud2 (map frame, latched)
 //
 // Goals (launch file, from config/arena_prior.json): `goals` = 9 doubles per goal
@@ -78,7 +78,7 @@ class AStarPlannerNode : public rclcpp::Node {
     planner_ = std::make_unique<AStarPlanner>(cfg, gt_map_);
 
     const rclcpp::QoS latched = rclcpp::QoS(1).reliable().transient_local();
-    pub_path_ = create_publisher<nav_msgs::msg::Path>("/plan/global_rrt", latched);
+    pub_path_ = create_publisher<nav_msgs::msg::Path>("/plan/global_path", latched);
     pub_map_cloud_ = create_publisher<sensor_msgs::msg::PointCloud2>("/viz/groundtruth_map_cloud", latched);
     publishGroundTruthCloud();
 

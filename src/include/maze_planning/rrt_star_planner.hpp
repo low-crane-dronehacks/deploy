@@ -61,7 +61,7 @@ class RRTStarPlanner {
 
   /**
    * @brief Plan a collision-free, clearance-optimized path between start_map and goal_map
-   * on the GroundTruthMap encoding, smoothed with a clamped cubic B-spline (/plan/global_rrt).
+   * on the GroundTruthMap encoding, smoothed with a clamped cubic B-spline (/plan/global_path).
    *
    * Returns false when the tree never connected to goal_map. out_path / out_raw_waypoints then hold the
    * best partial path (towards the node closest to the goal) for debugging only: do not fly it.

@@ -7,8 +7,8 @@ Decoupled ROS 2 nodes (Section 2.2, 2.3, WP-3, WP-4); each talks to the others o
     estimator such as iSAM2 / the merged stack (map_odom_source:=external)
   - isam2_depth_node (isam2:=true; needs GTSAM + px4_msgs): ~/obstacles -> MPPI's local distance grid
   - global planner (planner:=astar | rrt_star): astar_planner_node (grid A* through the arena_prior.json
-    checkpoints) or rrt_star_planner_node -> /plan/global_rrt (latched, timed, on each new plan)
-  - path_transformer_node: /plan/global_rrt + TF map->odom -> /plan/local_reference (20 Hz),
+    checkpoints) or rrt_star_planner_node -> /plan/global_path (latched, timed, on each new plan)
+  - path_transformer_node: /plan/global_path + TF map->odom -> /plan/local_reference (20 Hz),
     /plan/rl_lookaheads (50 Hz)
   - mppi_controller_node: /plan/local_reference + obstacle clouds -> /control/trajectory_setpoint (50 Hz),
     /costmap/local_voxels, /viz/mppi_candidates (MarkerArray)
@@ -184,7 +184,7 @@ def _setup(context):
                "-p", f"world_frame:={ISAM2_WORLD_FRAME}"],
             cwd=ROOT, output="screen"))
 
-    # 1. Global planner (/plan/global_rrt, latched + /viz/groundtruth_map_cloud): A* (default) or RRT*.
+    # 1. Global planner (/plan/global_path, latched + /viz/groundtruth_map_cloud): A* (default) or RRT*.
     planner = LaunchConfiguration("planner").perform(context)
     if planner not in ("astar", "rrt_star"):
         raise RuntimeError(f"planner must be astar | rrt_star, got {planner!r}")

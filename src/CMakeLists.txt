@@ -73,7 +73,7 @@ if(ament_cmake_FOUND)
   find_package(std_srvs QUIET)
 
   # Dedicated modular ROS 2 nodes matching Section 2.2, 2.3, WP-3, and WP-4:
-  #   1. rrt_star_planner_node -> /plan/global_rrt
+  #   1. rrt_star_planner_node -> /plan/global_path
   #   2. path_transformer_node -> /plan/local_reference & /plan/rl_lookaheads
   #   3. mppi_controller_node  -> /costmap/local_voxels & /control/trajectory_setpoint
   #   4. control_mux_node      -> /fmu/in/trajectory_setpoint OR /fmu/in/vehicle_rates_setpoint

@@ -207,7 +207,7 @@ this course, so treat that warning as a failure.
 | Topic | Type | Frame | Producer -> consumer |
 | :--- | :--- | :--- | :--- |
 | `/odometry/local` | `nav_msgs/Odometry` (twist in body FRD) | `odom_ned` | `px4_local_odom_ned.py` / `sim_loopback_node` -> all |
-| `/plan/global_rrt` | `nav_msgs/Path`, **latched** (reliable, transient_local) | `map_ned` | global planner -> `path_transformer_node` |
+| `/plan/global_path` | `nav_msgs/Path`, **latched** (reliable, transient_local) | `map_ned` | global planner -> `path_transformer_node` |
 | `/plan/local_reference` | `nav_msgs/Path` (timed, see below) | `odom_ned` | `path_transformer_node` -> MPPI |
 | `/plan/replan_blocked_corridor` | `geometry_msgs/PointStamped` | `map_ned` | MPPI -> global planner |
 | `/oak/points/clamped` | `sensor_msgs/PointCloud2` | any, via TF | depth filter -> MPPI costmap (ray-cleared from the cloud frame's origin) |
@@ -219,7 +219,7 @@ this course, so treat that warning as a failure.
 ### Global planner contract (how to swap RRT* for the merged planner)
 
 Replace `rrt_star_planner_node` with any node that:
-1. publishes `nav_msgs/Path` on `/plan/global_rrt` in `map_ned`, latched, **only when the plan changes**. A new
+1. publishes `nav_msgs/Path` on `/plan/global_path` in `map_ned`, latched, **only when the plan changes**. A new
    message means "new plan, starting at the vehicle": `path_transformer_node` restarts progress at s = 0. The same
    path sent again keeps progress, but do not rely on it.
 2. puts the timing in the pose stamps: `poses[i].header.stamp = header.stamp + t_i`. Velocities are derived from
