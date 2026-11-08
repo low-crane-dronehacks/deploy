@@ -37,7 +37,7 @@ ARGUMENTS = [
                             "ignores the Offboard request on a mismatch, and flight_interface's own default is 1"),
     # ours
     ('mode', 'fly', 'fly | handheld (props off: no flight interface, no setpoints)'),
-    ('policy', 'policies/ftw0_s330_1627.npz', 'exported policy (.npz), relative to the package share'),
+    ('policy', 'policies/ftsc_s334_1627.npz', 'exported policy (.npz), relative to the package share'),
     ('stereo_backend', 'vpi', 'vpi (C++ vpi_stereo, CUDA census+SGM) | sgbm (OpenCV, CPU, ~29 ms at 640x400 on 6 cores)'),
     ('swap_eyes', 'false', 'swap stereo images only when image labels disagree with correct calibration; verify on the bench'),
     ('max_disparity', '96', 'stereo search range at 640 px: min range = f*B/max (~0.33 m at 96, 0.40 m at 80)'),
