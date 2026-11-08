@@ -72,7 +72,7 @@ struct MPPIConfig {
   double safe_distance_m{0.42};     // obstacle comfort inflation radius (m)
   double lethal_distance_m{0.21};   // hard collision radius (m)
   double drone_radius_m{0.21};      // physical collision radius for FMEA Pillar Dead-Center check
-  double stall_cost_threshold{220.0};
+  double stall_cost_threshold{850.0};
 };
 
 /**

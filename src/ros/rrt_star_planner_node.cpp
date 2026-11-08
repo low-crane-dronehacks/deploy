@@ -131,10 +131,17 @@ class RRTStarPlannerNode : public rclcpp::Node {
   }
 
   void onBlockedCorridorReplan(const geometry_msgs::msg::PointStamped& m) {
+    const double now_s = this->now().seconds();
+    if (now_s - last_replan_s_ < 1.5) return;
+    last_replan_s_ = now_s;
+
     const Eigen::Vector3d blocked_map(m.point.x, m.point.y, m.point.z);
-    gt_map_->markCorridorBlocked(blocked_map, 0.36);
+    gt_map_->markCorridorBlocked(blocked_map, 0.20);
+    PlannedPath candidate;
     if (rrt_planner_->planFullCourse(current_pos_map_, prefer_window_, include_return_leg_,
-                                     global_path_map_)) {
+                                     candidate) &&
+        candidate.total_length_m > 1.0) {
+      global_path_map_ = std::move(candidate);
       RCLCPP_WARN(get_logger(),
                   "Replanned global RRT* around blocked corridor [%.2f, %.2f, %.2f] -> new len=%.2fm",
                   blocked_map.x(), blocked_map.y(), blocked_map.z(),
@@ -181,6 +188,7 @@ class RRTStarPlannerNode : public rclcpp::Node {
   std::unique_ptr<RRTStarPlanner> rrt_planner_;
   PlannedPath global_path_map_;
   Eigen::Vector3d current_pos_map_{Eigen::Vector3d::Zero()};
+  double last_replan_s_{-10.0};
   sensor_msgs::msg::PointCloud2 gt_cloud_msg_;
 
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_global_rrt_;

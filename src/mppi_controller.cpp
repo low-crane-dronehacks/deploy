@@ -407,7 +407,8 @@ TrajectorySetpointCmd MPPIController::computeCommand(
     consecutive_stall_ticks_ = 0;
   }
 
-  if (corridor_blocked || consecutive_stall_ticks_ >= 3) {
+  if (corridor_blocked || consecutive_stall_ticks_ >= 6) {
+    consecutive_stall_ticks_ = 0;
     cmd.obstacle_hold = true;
     cmd.request_global_replan = true;
     cmd.blocked_obstacle_pos = corridor_blocked

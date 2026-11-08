@@ -13,6 +13,8 @@ DEFAULT_GT_MAP = DEPLOY_ROOT / "config" / "course_groundtruth.bin"
 def _find_lib() -> Path:
     candidates = [
         DEPLOY_ROOT / "build" / "libmaze_planning_core.so",
+        DEPLOY_ROOT / "build" / "pkg_maze_planning" / "libmaze_planning_core.so",
+        DEPLOY_ROOT / "install" / "pkg_maze_planning" / "lib" / "libmaze_planning_core.so",
         DEPLOY_ROOT / "build" / "isam2_depth" / "libmaze_planning_core.so",
         DEPLOY_ROOT / "install" / "isam2_depth" / "lib" / "libmaze_planning_core.so",
     ]

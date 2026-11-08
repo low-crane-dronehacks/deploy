@@ -88,14 +88,20 @@ def _setup(context):
 
     sim_time_str = "false" if sim_loopback.lower() == "true" else str(p["use_sim_time"]).lower()
 
-    def _node_cmd(exe_name: str) -> list[str]:
-        installed = os.path.join(ROOT, "install", "isam2_depth", "lib", "isam2_depth", exe_name)
-        return [installed] if os.path.exists(installed) else ["ros2", "run", "isam2_depth", exe_name]
+    def _node_cmd(pkg_name: str, exe_name: str) -> list[str]:
+        candidates = [
+            os.path.join(ROOT, "install", pkg_name, "lib", pkg_name, exe_name),
+            os.path.join(ROOT, "install", "isam2_depth", "lib", "isam2_depth", exe_name),
+        ]
+        for c in candidates:
+            if os.path.exists(c):
+                return [c]
+        return ["ros2", "run", pkg_name, exe_name]
 
     # 1. RRT* Global Planner Node (/plan/global_rrt @ 1 Hz + /viz/groundtruth_map_cloud)
     actions.append(
         ExecuteProcess(
-            cmd=_node_cmd("rrt_star_planner_node")
+            cmd=_node_cmd("pkg_maze_planning", "rrt_star_planner_node")
             + [
                 "--ros-args",
                 "-p",
@@ -113,7 +119,7 @@ def _setup(context):
     # 2. Path Transformer Node (map -> odom -> /plan/local_reference @ 20 Hz & /plan/rl_lookaheads @ 50 Hz)
     actions.append(
         ExecuteProcess(
-            cmd=_node_cmd("path_transformer_node")
+            cmd=_node_cmd("pkg_maze_planning", "path_transformer_node")
             + [
                 "--ros-args",
                 "-p",
@@ -129,7 +135,7 @@ def _setup(context):
     # 3. 2048-Rollout MPPI Controller & STVL VoxelCostmap Node (/costmap/local_voxels & /control/trajectory_setpoint)
     actions.append(
         ExecuteProcess(
-            cmd=_node_cmd("mppi_controller_node")
+            cmd=_node_cmd("pkg_maze_planning", "mppi_controller_node")
             + [
                 "--ros-args",
                 "-p",
@@ -153,7 +159,7 @@ def _setup(context):
     # 4. Control Mode Multiplexer Node (Classical MPPI vs. RL Policy + Watchdogs)
     actions.append(
         ExecuteProcess(
-            cmd=_node_cmd("control_mux_node")
+            cmd=_node_cmd("pkg_maze_control", "control_mux_node")
             + [
                 "--ros-args",
                 "-p",

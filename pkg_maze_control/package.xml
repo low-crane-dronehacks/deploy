@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>pkg_maze_control</name>
+  <version>0.2.0</version>
+  <description>WP-4 PX4 Bridge &amp; Autonomy Supervisor: Control Mode Multiplexer switching between Classical MPPI and RL Policy with safety fallback interlocks.</description>
+  <maintainer email="noreply@example.com">dronehacks</maintainer>
+  <license>TODO</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>eigen</depend>
+  <depend>rclcpp</depend>
+  <depend>nav_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>pkg_maze_planning</depend>
+  <depend>px4_msgs</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
