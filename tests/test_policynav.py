@@ -61,3 +61,22 @@ def test_policy_runs():
     pol = NumpyPolicy(os.path.join(ROOT, 'policies', 'comp_s2.npz'))
     a = pol(np.zeros((2, 80, 128), np.float32), np.zeros(pol.meta['proprio_dim'], np.float32))
     assert a.shape == (pol.meta['num_actions'],) and np.isfinite(a).all()
+
+
+def test_edge_fill_right_band_takes_nearest_valid_inward():
+    import numpy as np
+    from policynav.obs import edge_fill
+    out = np.tile(np.linspace(0.1, 0.9, 128, dtype=np.float32), (80, 1))
+    valid = np.ones((80, 128), bool)
+    valid[:, -14:] = False                         # drone 17's right-edge stereo band
+    valid[:, :3] = False                           # and a thin left one
+    out[~valid] = 0.0
+    f, v = edge_fill(out, valid, 16)
+    assert v.all()
+    assert np.allclose(f[:, -14:], out[:, [-15]]) and np.allclose(f[:, :3], out[:, [3]])
+    f2, v2 = edge_fill(out, valid, 0)
+    assert (f2 == out).all() and (v2 == valid).all()
+    valid[:, -20:] = False                          # band wider than the fill: inner columns stay invalid (near)
+    out[~valid] = 0.0
+    f3, v3 = edge_fill(out, valid, 16)
+    assert not v3[:, -16:].any() and (f3[:, -16:] == 0).all()
