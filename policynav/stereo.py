@@ -203,3 +203,37 @@ class RateGate:
             return False
         self.next += self.period
         return True
+
+
+class StereoPairer:
+    """Pair left/right frames by camera stamp, robust to BURSTY delivery.
+
+    Keeping only the latest frame per eye loses valid pairs whenever one eye's frames arrive in a burst ahead of the
+    other's (L1 L2 L3 R1 R2 R3: L1/L2 are overwritten before R1/R2 arrive). Here each eye keeps its last ``keep``
+    frames; every new frame looks for the NEWEST left/right pair within ``slop_s`` of each other, returns it, and
+    drops everything at or before it (older complete pairs are skipped on purpose: always process the freshest)."""
+
+    def __init__(self, slop_s: float, keep: int = 6):
+        self.slop, self.keep = float(slop_s), int(keep)
+        self.buf = {'l': [], 'r': []}
+        self.skipped = 0                       # frames dropped without being matched (stale or partnerless)
+
+    def push(self, side: str, t: float, msg):
+        """Add a frame; -> (left_msg, right_msg, t_left) for the newest matched pair, or None."""
+        b = self.buf[side]
+        b.append((t, msg))
+        b.sort(key=lambda x: x[0])
+        if len(b) > self.keep:
+            self.skipped += len(b) - self.keep
+            del b[:len(b) - self.keep]
+        for tl, ml in reversed(self.buf['l']):
+            match = [(abs(tl - tr), tr, mr) for tr, mr in self.buf['r'] if abs(tl - tr) <= self.slop]
+            if match:
+                _, tr, mr = min(match, key=lambda x: x[0])
+                cut = max(tl, tr)
+                for s in ('l', 'r'):
+                    keep_ = [x for x in self.buf[s] if x[0] > cut]
+                    self.skipped += len(self.buf[s]) - len(keep_) - 1
+                    self.buf[s] = keep_
+                return ml, mr, tl
+        return None
