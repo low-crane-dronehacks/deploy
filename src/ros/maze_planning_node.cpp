@@ -196,9 +196,9 @@ class MazePlanningNode : public rclcpp::Node {
     costmap_->updateFromClampedPointCloud(get_clock()->now().seconds(), sensor_map, pts_map);
   }
 
-  nav_msgs::msg::Path toRosPath(const PlannedPath& p, const std::string& frame_id) const {
+  nav_msgs::msg::Path toRosPath(const PlannedPath& p, const std::string& frame_id) {
     nav_msgs::msg::Path msg;
-    msg.header.stamp = get_clock()->now();
+    msg.header.stamp = this->now();
     msg.header.frame_id = frame_id;
     msg.poses.reserve(p.points.size());
     for (const auto& pt : p.points) {

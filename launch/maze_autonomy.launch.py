@@ -1,16 +1,18 @@
 """Launch the Dual-Track Autonomous Quadrotor Maze Navigation System (system_architecture_plan.md).
 
-Launches:
+Launches the decoupled ROS 2 nodes matching Section 2.2, 2.3, WP-3, and WP-4:
   - isam2_depth_node (when GTSAM is built): TF map -> odom + local DistanceGrid
-  - maze_planning_node: GroundTruthMap + Informed RRT* (/plan/global_rrt) + PathTransformer
-    (/plan/local_reference, /plan/rl_lookaheads) + STVL Costmap (/costmap/local_voxels) +
-    2048-rollout MPPI Controller (/control/trajectory_setpoint)
+  - rrt_star_planner_node: GroundTruthMap + Informed RRT* -> /plan/global_rrt (1 Hz / event)
+  - path_transformer_node: Subscribes to /plan/global_rrt + TF map->odom -> publishes
+    /plan/local_reference (20 Hz) and /plan/rl_lookaheads (50 Hz)
+  - mppi_controller_node: Subscribes to /plan/local_reference + /oak/points/clamped ->
+    STVL Costmap (/costmap/local_voxels @ 30 Hz) + 2048-rollout MPPI (/control/trajectory_setpoint @ 50 Hz)
   - control_mux_node: Switches Classical MPPI vs. RL Policy (/fmu/in/trajectory_setpoint or
     /fmu/in/vehicle_rates_setpoint) with safety fallback interlocks
 
 Usage:
+  ros2 launch launch/maze_autonomy.launch.py sim_loopback:=true inject_demo_pillar:=true rviz:=true arm:=false
   ros2 launch launch/maze_autonomy.launch.py hardware:=sitl arm:=false
-  ros2 launch launch/maze_autonomy.launch.py hardware:=sitl mode:=classical arm:=true
   ros2 launch launch/maze_autonomy.launch.py hardware:=drone mode:=classical arm:=true
 """
 import os
@@ -86,12 +88,48 @@ def _setup(context):
 
     sim_time_str = "false" if sim_loopback.lower() == "true" else str(p["use_sim_time"]).lower()
 
-    # 1. Maze Planning Node (RRT* + PathTransformer + VoxelCostmap + 2048-rollout MPPI)
-    plan_bin = os.path.join(ROOT, "install", "isam2_depth", "lib", "isam2_depth", "maze_planning_node")
-    plan_cmd = [plan_bin] if os.path.exists(plan_bin) else ["ros2", "run", "isam2_depth", "maze_planning_node"]
+    def _node_cmd(exe_name: str) -> list[str]:
+        installed = os.path.join(ROOT, "install", "isam2_depth", "lib", "isam2_depth", exe_name)
+        return [installed] if os.path.exists(installed) else ["ros2", "run", "isam2_depth", exe_name]
+
+    # 1. RRT* Global Planner Node (/plan/global_rrt @ 1 Hz + /viz/groundtruth_map_cloud)
     actions.append(
         ExecuteProcess(
-            cmd=plan_cmd
+            cmd=_node_cmd("rrt_star_planner_node")
+            + [
+                "--ros-args",
+                "-p",
+                f"use_sim_time:={sim_time_str}",
+                "-p",
+                f"groundtruth_map_path:={gt_map_path}",
+                "-p",
+                f"cruise_speed_m_s:={cruise_speed}",
+            ],
+            cwd=ROOT,
+            output="screen",
+        )
+    )
+
+    # 2. Path Transformer Node (map -> odom -> /plan/local_reference @ 20 Hz & /plan/rl_lookaheads @ 50 Hz)
+    actions.append(
+        ExecuteProcess(
+            cmd=_node_cmd("path_transformer_node")
+            + [
+                "--ros-args",
+                "-p",
+                f"use_sim_time:={sim_time_str}",
+                "-p",
+                f"cruise_speed_m_s:={cruise_speed}",
+            ],
+            cwd=ROOT,
+            output="screen",
+        )
+    )
+
+    # 3. 2048-Rollout MPPI Controller & STVL VoxelCostmap Node (/costmap/local_voxels & /control/trajectory_setpoint)
+    actions.append(
+        ExecuteProcess(
+            cmd=_node_cmd("mppi_controller_node")
             + [
                 "--ros-args",
                 "-p",
@@ -112,12 +150,10 @@ def _setup(context):
         )
     )
 
-    # 2. Control Mode Multiplexer Node (Classical MPPI vs. RL Policy + Watchdogs)
-    mux_bin = os.path.join(ROOT, "install", "isam2_depth", "lib", "isam2_depth", "control_mux_node")
-    mux_cmd = [mux_bin] if os.path.exists(mux_bin) else ["ros2", "run", "isam2_depth", "control_mux_node"]
+    # 4. Control Mode Multiplexer Node (Classical MPPI vs. RL Policy + Watchdogs)
     actions.append(
         ExecuteProcess(
-            cmd=mux_cmd
+            cmd=_node_cmd("control_mux_node")
             + [
                 "--ros-args",
                 "-p",

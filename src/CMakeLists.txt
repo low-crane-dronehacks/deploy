@@ -69,21 +69,32 @@ if(ament_cmake_FOUND)
   find_package(geometry_msgs REQUIRED)
   find_package(tf2_ros REQUIRED)
 
-  add_executable(maze_planning_node ros/maze_planning_node.cpp)
-  target_link_libraries(maze_planning_node maze_planning_core)
-  ament_target_dependencies(maze_planning_node
-    rclcpp tf2_ros sensor_msgs nav_msgs std_msgs geometry_msgs
+  # Dedicated modular ROS 2 nodes matching Section 2.2, 2.3, WP-3, and WP-4:
+  #   1. rrt_star_planner_node -> /plan/global_rrt
+  #   2. path_transformer_node -> /plan/local_reference & /plan/rl_lookaheads
+  #   3. mppi_controller_node  -> /costmap/local_voxels & /control/trajectory_setpoint
+  #   4. control_mux_node      -> /fmu/in/trajectory_setpoint OR /fmu/in/vehicle_rates_setpoint
+  add_executable(rrt_star_planner_node ros/rrt_star_planner_node.cpp)
+  target_link_libraries(rrt_star_planner_node maze_planning_core)
+  ament_target_dependencies(rrt_star_planner_node
+    rclcpp tf2_ros sensor_msgs nav_msgs geometry_msgs
   )
-  if(px4_msgs_FOUND)
-    target_compile_definitions(maze_planning_node PRIVATE HAVE_PX4_MSGS=1)
-    ament_target_dependencies(maze_planning_node px4_msgs)
-  endif()
 
   add_executable(path_transformer_node ros/path_transformer_node.cpp)
   target_link_libraries(path_transformer_node maze_planning_core)
   ament_target_dependencies(path_transformer_node
     rclcpp tf2_ros nav_msgs std_msgs geometry_msgs
   )
+
+  add_executable(mppi_controller_node ros/mppi_controller_node.cpp)
+  target_link_libraries(mppi_controller_node maze_planning_core)
+  ament_target_dependencies(mppi_controller_node
+    rclcpp tf2_ros sensor_msgs nav_msgs std_msgs geometry_msgs
+  )
+  if(px4_msgs_FOUND)
+    target_compile_definitions(mppi_controller_node PRIVATE HAVE_PX4_MSGS=1)
+    ament_target_dependencies(mppi_controller_node px4_msgs)
+  endif()
 
   add_executable(control_mux_node ros/control_mux_node.cpp)
   target_link_libraries(control_mux_node maze_planning_core)
@@ -95,12 +106,28 @@ if(ament_cmake_FOUND)
     ament_target_dependencies(control_mux_node px4_msgs)
   endif()
 
+  # Optional combined single-process node for zero-copy benchmarking
+  add_executable(maze_planning_node ros/maze_planning_node.cpp)
+  target_link_libraries(maze_planning_node maze_planning_core)
+  ament_target_dependencies(maze_planning_node
+    rclcpp tf2_ros sensor_msgs nav_msgs std_msgs geometry_msgs
+  )
+  if(px4_msgs_FOUND)
+    target_compile_definitions(maze_planning_node PRIVATE HAVE_PX4_MSGS=1)
+    ament_target_dependencies(maze_planning_node px4_msgs)
+  endif()
+
   install(TARGETS maze_planning_core
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
     RUNTIME DESTINATION bin
   )
-  install(TARGETS maze_planning_node path_transformer_node control_mux_node
+  install(TARGETS
+    rrt_star_planner_node
+    path_transformer_node
+    mppi_controller_node
+    control_mux_node
+    maze_planning_node
     DESTINATION lib/${PROJECT_NAME}
   )
 
