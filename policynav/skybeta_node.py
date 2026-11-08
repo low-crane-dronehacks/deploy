@@ -11,7 +11,8 @@ The skybeta contract (~/skybeta/docs/competitor_guide.md on the drone):
 
   in   depth (policynav/depth_node.py: /policynav/depth/image + camera_info), TF base_link <- depth frame
        /fmu/out/vehicle_attitude                                  PX4 FRD->NED attitude
-       /fmu/out/vehicle_local_position                            PX4 NED velocity + dist_bottom
+       /fmu/out/vehicle_local_position                            PX4 local velocity + filtered dist_bottom
+       /fmu/out/estimator_status_flags                            local yaw and range fusion readiness
        /skybeta/state (JSON)                                         armed / offboard_active
   out  /skybeta/setpoint/twist at 10 Hz: zero until Offboard is active, then the policy's command
        /policynav/status (JSON)
@@ -62,7 +63,8 @@ class Skybeta(Node):
         self.depth_stale_s, self.depth_lost_s = float(dp('depth_stale_s', 0.5)), float(dp('depth_lost_s', 2.0))
         self.feedback_lost_s = float(dp('feedback_lost_s', 0.5))
         self.state_lost_s = float(dp('state_lost_s', 0.5))
-        self.feedback = Px4Feedback(self.feedback_lost_s, self.meta['rf_max'])
+        self.feedback = Px4Feedback(self.feedback_lost_s, self.meta['rf_max'],
+                                    float(dp('estimator_lost_s', 2.5)))
         self.twist_frame = dp('twist_frame', 'odom')
         self.base_frame = dp('base_frame', 'base_link')
         mismatch = [round(float(v), 2) for v in self.v_max]
@@ -74,11 +76,13 @@ class Skybeta(Node):
         self.tf_buffer = Buffer()
         # transport: /tf_static only (the depth frame chain is static); tf_static_only:=false restores /tf too
         self.tf_listener = tf_listener(self.tf_buffer, self, bool(dp('tf_static_only', True)))
-        from px4_msgs.msg import VehicleAttitude, VehicleLocalPosition
+        from px4_msgs.msg import VehicleAttitude, VehicleLocalPosition, EstimatorStatusFlags
         self.create_subscription(VehicleAttitude, dp('attitude_topic', '/fmu/out/vehicle_attitude'),
                                  self._on_att, PX4_QOS)
         self.create_subscription(VehicleLocalPosition, dp('lpos_topic', '/fmu/out/vehicle_local_position'),
                                  self._on_lpos, PX4_QOS)
+        self.create_subscription(EstimatorStatusFlags, dp('estimator_topic', '/fmu/out/estimator_status_flags'),
+                                 self._on_estimator, PX4_QOS)
         self.create_subscription(String, dp('state_topic', '/skybeta/state'), self._on_state, 10)
         self.create_subscription(CameraInfo, dp('depth_info_topic', '/policynav/depth/camera_info'), self._on_info,
                                  qos_profile_sensor_data)
@@ -101,6 +105,7 @@ class Skybeta(Node):
         self.airborne = False
         self.cmd = ((0.0, 0.0, 0.0), 0.0)
         self.timing = []
+        self.last_startup_blocker = None
         self.create_timer(0.1, self._tick)
         self.create_timer(1.0, self._status)
         self.get_logger().info(f"SKYBETA: policy {self.meta['source']} (v_max {mismatch}), never arms; "
@@ -124,6 +129,9 @@ class Skybeta(Node):
 
     def _on_lpos(self, m):
         self.feedback.on_lpos(m, self._now(), active=self.phase == 'fly')
+
+    def _on_estimator(self, m):
+        self.feedback.on_estimator(m, self._now(), active=self.phase == 'fly')
 
     def _on_info(self, m):
         if m.k[0] > 0 and self.K is None:
@@ -174,6 +182,15 @@ class Skybeta(Node):
             self.phase, self.why = 'yielded', 'interface state lost, Offboard ended or disarmed'
             self.cmd = ((0.0, 0.0, 0.0), 0.0)
         feedback_error = self.feedback.error(t, self.feedback_lost_s)
+        if self.phase == 'wait':
+            blocker = feedback_error
+            if blocker is None and (self.depth_t is None or not 0 <= t - self.depth_t <= self.depth_stale_s):
+                blocker = 'depth missing or stale'
+            if blocker:
+                self.get_logger().error(f'POLICY START BLOCKED: {blocker}', throttle_duration_sec=5.0)
+            elif self.last_startup_blocker:
+                self.get_logger().info('Policy sensor inputs ready; waiting for pilot Offboard')
+            self.last_startup_blocker = blocker
         if self.phase == 'wait' and offboard:
             if feedback_error or self.depth_t is None or not 0 <= t - self.depth_t <= self.depth_stale_s:
                 self._hold(feedback_error or 'Offboard started without fresh depth')
@@ -233,9 +250,14 @@ class Skybeta(Node):
               'cmd_enu': [round(vx, 2), round(vy, 2), round(vz, 2)], 'yaw_rate': round(wz, 2),
               'range_m': None if self._range() is None else round(self._range(), 2), 'airborne': self.airborne,
               'feedback_error': self.feedback.error(self._now(), self.feedback_lost_s),
+              'range_source': self.feedback.range_source,
+              'range_cached': self.feedback.range_t is not None and self._now() - self.feedback.range_t > self.feedback_lost_s,
               'range_age_s': None if self.feedback.range_t is None else round(self._now() - self.feedback.range_t, 2),
               'lpos_age_s': None if self.feedback.lpos_t is None else round(self._now() - self.feedback.lpos_t, 2),
               'attitude_age_s': None if self.feedback.att_t is None else round(self._now() - self.feedback.att_t, 2),
+              'heading_source': (None if self.feedback.heading_error(self._now()) else
+                                 'north' if self.feedback.heading_good else 'external_vision_local'),
+              'estimator_age_s': None if self.feedback.estimator_t is None else round(self._now() - self.feedback.estimator_t, 2),
               'state_age_s': None if self.state_t is None else round(self._now() - self.state_t, 2),
               'depth_age_s': None if self.depth_t is None else round(self._now() - self.depth_t, 2),
               'depth_valid_frac': None if self.depth_img is None else round(float((self.depth_img > 0).mean()), 3),

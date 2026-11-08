@@ -43,12 +43,13 @@ On Skybeta, the same action is converted to an ENU twist and sent through the or
 
 **Skybeta flying policy inputs (PX4 1.16):** fused NED velocity from
 `/fmu/out/vehicle_local_position`, attitude from `/fmu/out/vehicle_attitude` (FRD to NED, w first),
-and valid `VehicleLocalPosition.dist_bottom` for the downward-distance observation. This is PX4's
-estimated bottom distance, not the raw `DistanceSensor.current_distance` sample. Invalid range retains
-the last valid distance; before any valid range arrives the observation uses `rf_max` (4 m). There is no
-altitude fallback. Raw cuVSLAM odometry is not consumed by the flying policy. Both PX4 streams must be
-fresh, with valid velocity and attitude; resets or invalid state feedback during flight latch a hold. See
-[SKYBETA.md](SKYBETA.md) for freshness thresholds and remaining stack dependencies.
+and filtered `VehicleLocalPosition.dist_bottom` for downward distance. Acceptance requires valid terrain
+or fresh, healthy range-height fusion flags, plus finite positive distance and valid vertical velocity.
+One accepted range is required before starting; later dropouts retain the last accepted distance.
+There is no altitude fallback. Heading accepts north alignment or fresh healthy local-frame vision-yaw
+fusion flags. Raw cuVSLAM odometry is not consumed by the flying policy. Velocity and attitude must remain
+valid and fresh; state resets or invalid feedback during flight latch a hold. Missing startup inputs
+produce explicit errors. See [SKYBETA.md](SKYBETA.md) for flag checks, thresholds and stack dependencies.
 
 **Known gaps** (in training, dronehacks-sim):
 - A see-through net with its frame is in training now (`netbars_*` runs). Taking off from the launch mark is

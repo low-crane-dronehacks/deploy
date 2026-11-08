@@ -15,7 +15,7 @@ import pytest
 
 from policynav import handheld as H, obs as O
 from policynav.px4_feedback import Px4Feedback
-from test_px4_feedback import lpos, att
+from test_px4_feedback import lpos, att, flags
 
 
 @pytest.fixture
@@ -114,3 +114,36 @@ def test_px4_inputs_reach_real_policy_step_and_enu_output(node):
     node.feedback.range_m, node.feedback.range_t = 4., None
     type(node)._step(node, 10.2)
     assert not node.airborne
+
+
+def test_local_vision_and_filtered_range_start_policy_from_ground(node):
+    node.phase = 'wait'
+    node.last_startup_blocker = None
+    node.feedback = Px4Feedback()
+    node.feedback.on_estimator(flags(), 10.)
+    node.feedback.on_lpos(lpos(heading_good_for_control=False, dist_bottom_valid=False,
+                              dist_bottom=.10), 10.)
+    node.feedback.on_att(att(), 10.)
+    node.policy = Msg(reset=lambda: None)
+    node.stack = O.FrameStack(2)
+    node.prev_action = np.ones(4)
+    node._tick()
+    assert node.phase == 'fly' and node.steps == [10.1]
+    assert node.feedback.range_m == .10
+    assert np.all(node.prev_action == 0.)
+
+
+def test_no_initial_range_logs_error_before_offboard_and_blocks_inference(node):
+    node.phase = 'wait'
+    node.last_startup_blocker = None
+    node.feedback.range_t = None
+    node.state['armed'] = False
+    errors = []
+    node.get_logger = lambda: Msg(error=lambda text, **kw: errors.append(text),
+                                 info=lambda *a, **kw: None, warning=lambda *a, **kw: None)
+    node._tick()
+    assert errors and 'range' in errors[0] and 'BLOCKED' in errors[0]
+    assert node.phase == 'wait' and not node.steps
+    node.state['armed'] = True
+    node._tick()
+    assert node.phase == 'hold' and not node.steps

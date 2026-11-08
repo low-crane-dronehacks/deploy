@@ -47,7 +47,9 @@ ARGUMENTS = [
     ('max_flight_s', '120.0', 'then /skybeta/hold'),
     ('lpos_topic', '/fmu/out/vehicle_local_position', 'PX4 1.16 fused NED velocity and estimated bottom distance'),
     ('attitude_topic', '/fmu/out/vehicle_attitude', 'PX4 fused FRD-to-NED attitude'),
+    ('estimator_topic', '/fmu/out/estimator_status_flags', 'PX4 local vision-yaw fusion readiness'),
     ('feedback_lost_s', '0.5', 'maximum age of each PX4 policy input stream'),
+    ('estimator_lost_s', '2.5', 'maximum age of PX4 estimator flags (periodic at 1 Hz plus changes)'),
     ('state_lost_s', '0.5', 'maximum age of flight_interface state before yielding'),
     ('dds_profile', 'team', 'team (config/fastdds_team.xml: skybeta\'s localhost profile + 8 MiB SHM segment, our '
                             'nodes only) | stack (inherit skybeta\'s profile unchanged)'),
@@ -144,8 +146,8 @@ def nodes(context):
         emulate_tty=True, condition=fly,
         parameters=[{'policy_file': lc('policy'), 'speed_cap': lc('speed_cap'), 'yaw_rate_cap': lc('yaw_rate_cap'),
                      'max_flight_s': lc('max_flight_s'), 'lpos_topic': lc('lpos_topic'),
-                     'attitude_topic': lc('attitude_topic'), 'feedback_lost_s': lc('feedback_lost_s'),
-                     'state_lost_s': lc('state_lost_s')}],
+                     'attitude_topic': lc('attitude_topic'), 'estimator_topic': lc('estimator_topic'), 'feedback_lost_s': lc('feedback_lost_s'),
+                     'estimator_lost_s': lc('estimator_lost_s'), 'state_lost_s': lc('state_lost_s')}],
     )
     handheld = Node(
         package='policynav', executable='handheld', name='policynav_handheld', prefix=prefix, output='screen', emulate_tty=True, additional_env=ours,

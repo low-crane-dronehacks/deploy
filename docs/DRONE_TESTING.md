@@ -161,13 +161,31 @@ To have it start with the stack, set these in `/etc/skybeta/drone.env` and resta
 
 Same pilot procedure as section 5. Handheld bench (section 3) first.
 Handheld still uses cuVSLAM state; it does not verify the flying policy's PX4 inputs. Before a
-separately approved policy flight, confirm PX4 `vehicle_local_position` velocity/heading validity
-and inspect `dist_bottom`, plus fresh `vehicle_attitude`. Invalid range retains the last valid reading;
-before the first valid reading it uses 4 m. Check `range_age_s` to distinguish held range from live readings.
-The flying policy requires both
-streams within `feedback_lost_s` (default 0.5 s), with no altitude fallback. Confirm `/skybeta/state`
-publishes JSON booleans `armed` and `offboard_active` more frequently than `state_lost_s` (0.5 s).
-`/policynav/status` reports `feedback_error`, `lpos_age_s`, `attitude_age_s`, and `state_age_s`.
+separately approved policy flight, confirm valid PX4 velocity and attitude, plus healthy heading and
+filtered-range inputs. `heading_good_for_control=false` is expected with local-frame vision yaw: fresh
+estimator flags must then show `cs_tilt_align` and `cs_ev_yaw` true, with no yaw fault or rejection.
+`dist_bottom_valid=false` is allowed only with fresh healthy range-height fusion (see [SKYBETA.md](SKYBETA.md)).
+The first accepted range must arrive before startup; afterwards dropouts retain the last distance.
+Check `range_source`, `range_cached`, and `range_age_s` to distinguish live filtered range from cached range.
+`POLICY START BLOCKED` errors identify missing/invalid inputs before arming; resolve them first.
+Local position and attitude must be within `feedback_lost_s` (0.5 s). Required estimator flags use
+`estimator_lost_s` (2.5 s), matching PX4's 1 Hz periodic publication plus status changes.
+Confirm `/skybeta/state` publishes JSON booleans `armed` and `offboard_active` within `state_lost_s` (0.5 s).
+
+Only one mission and one flight interface may run. The organizer's default `competitor_example`
+launches a square mission automatically. Its pose targets can override our HOLD/twists.
+On skybeta-17, `COMPETITOR_PKG=disabled` in `/etc/skybeta/drone.env` intentionally selects a nonexistent
+package so the competitor window stays at a shell after startup. The running example was stopped too.
+Keep that setting for manual launches. To autostart ours instead, set `COMPETITOR_PKG=policynav` and
+`COMPETITOR_LAUNCH=skybeta.launch.py`, recreate the stack, and do not also launch ours manually.
+Before arming, check:
+
+```bash
+ros2 node list | grep -E 'flight_interface|square'
+# Exactly one flight_interface, no square_mission (after launching ours).
+ros2 topic info /skybeta/setpoint/pose -v    # no example pose publisher
+ros2 topic info /skybeta/setpoint/twist -v   # only the intended mission publisher
+```
 
 For a props-off stereo check, compare the normal handheld launch with `swap_eyes:=true` only if physical
 images are mislabelled relative to correctly labelled calibration. This swaps images only; camera-info and TF stay fixed.
@@ -206,7 +224,8 @@ FLIGHT_BAG="/root/team_ws/logs/bags/flight_$(date -u +%Y%m%dT%H%M%SZ)"
 ros2 bag record -o "$FLIGHT_BAG" \
   /fmu/out/vehicle_local_position \
   /fmu/out/vehicle_attitude \
-  /fmu/out/vehicle_status \
+  /fmu/out/estimator_status_flags \
+  /fmu/out/vehicle_status_v1 \
   /fmu/out/vehicle_land_detected \
   /skybeta/state /skybeta/setpoint/twist \
   /policynav/status /policynav/depth/image /policynav/depth/camera_info \

@@ -64,7 +64,7 @@ def test_range_before_first_valid_sample_is_rf_max():
     f.on_lpos(lpos(dist_bottom_valid=False), 10.)
     f.on_att(att(), 10.)
     assert f.range_m == 4. and f.range_t is None
-    assert f.error(10., .5) is None
+    assert 'range' in f.error(10., .5)
 
 
 def test_range_stays_cached_through_long_dropout_but_state_must_stay_fresh():
@@ -108,3 +108,95 @@ def test_both_streams_required_and_independently_expire():
     f.on_att(att(), 10.)
     f.on_lpos(lpos(timestamp_sample=1_600_000), 10.6)
     assert f.error(10.6, .5)
+
+
+def flags(**changes):
+    return Msg(**(dict(timestamp_sample=1_000_000, cs_tilt_align=True, cs_ev_yaw=True,
+                       cs_ev_yaw_fault=False, fs_bad_hdg=False, reject_yaw=False,
+                       cs_rng_hgt=True, cs_rng_fault=False, cs_rng_stuck=False, reject_hagl=False) | changes))
+
+
+def test_local_vision_heading_allows_ground_start_with_real_range():
+    f = Px4Feedback()
+    f.on_lpos(lpos(heading_good_for_control=False, dist_bottom_valid=False), 10.)
+    f.on_att(att(), 10.)
+    f.on_estimator(flags(), 10.)
+    f.on_lpos(lpos(timestamp_sample=1_100_000, heading_good_for_control=False,
+                   dist_bottom_valid=False, dist_bottom=.09), 10.1)
+    assert f.error(10.1, .5) is None
+    assert f.range_m == .09
+
+
+@pytest.mark.parametrize('change', [dict(cs_ev_yaw=False), dict(cs_tilt_align=False),
+    dict(cs_ev_yaw_fault=True), dict(fs_bad_hdg=True), dict(reject_yaw=True)])
+def test_vision_heading_failure_latches_in_flight(change):
+    f = ready()
+    f.on_estimator(flags(), 10.)
+    f.on_lpos(lpos(timestamp_sample=1_100_000, heading_good_for_control=False), 10.1)
+    f.on_estimator(flags(timestamp_sample=1_100_000, **change), 10.1, active=True)
+    f.on_estimator(flags(timestamp_sample=1_200_000), 10.2, active=True)
+    assert 'heading' in f.error(10.2, .5)
+
+
+def test_vision_heading_requires_fresh_nonduplicate_estimator_flags():
+    f = ready()
+    f.on_estimator(flags(), 10.)
+    f.on_lpos(lpos(timestamp_sample=3_400_000, heading_good_for_control=False), 12.4)
+    f.on_att(att(timestamp_sample=3_400_000), 12.4)
+    f.on_estimator(flags(), 12.6)
+    assert 'estimator' in f.error(12.6, .5)
+
+
+def test_global_heading_does_not_require_vision_flags():
+    assert ready().error(10.1, .5) is None
+
+
+@pytest.mark.parametrize('change', [dict(cs_rng_hgt=False), dict(cs_tilt_align=False),
+    dict(cs_rng_fault=True), dict(cs_rng_stuck=True), dict(reject_hagl=True)])
+def test_bad_range_fusion_retains_last_distance(change):
+    f = ready()
+    f.on_estimator(flags(**change), 10.)
+    f.on_lpos(lpos(timestamp_sample=1_100_000, dist_bottom_valid=False, dist_bottom=2.), 10.1)
+    assert f.range_m == 1.2 and f.range_t == 10.
+
+
+def test_primary_range_height_is_accepted_without_terrain_validity():
+    f = ready()
+    f.on_estimator(flags(), 10.)
+    f.on_lpos(lpos(timestamp_sample=1_100_000, dist_bottom_valid=False, dist_bottom=.09), 10.1)
+    assert f.range_m == .09 and f.range_t == 10.1
+
+
+def test_stale_range_fusion_flags_cannot_refresh_distance():
+    f = ready()
+    f.on_estimator(flags(), 10.)
+    f.on_lpos(lpos(timestamp_sample=3_600_000, dist_bottom_valid=False, dist_bottom=2.), 12.6)
+    assert f.range_m == 1.2 and f.range_t == 10.
+
+
+def test_missing_initial_range_blocks_startup_without_claiming_four_metres():
+    f = Px4Feedback()
+    f.on_lpos(lpos(dist_bottom_valid=False), 10.)
+    f.on_att(att(), 10.)
+    assert 'range' in f.error(10.1, .5)
+
+
+def test_duplicate_local_position_cannot_refresh_range():
+    f = ready()
+    f.on_estimator(flags(), 10.1)
+    f.on_lpos(lpos(dist_bottom_valid=False, dist_bottom=2.), 10.1)
+    assert f.range_m == 1.2 and f.range_t == 10.
+
+
+def test_one_hz_flags_remain_usable_during_flight():
+    f = ready()
+    f.on_estimator(flags(), 10.)
+    for i in range(1, 31):
+        stamp, now = 1_000_000 + i * 100_000, 10. + i * .1
+        if i % 10 == 0:
+            f.on_estimator(flags(timestamp_sample=stamp), now, active=True)
+        f.on_lpos(lpos(timestamp_sample=stamp, heading_good_for_control=False,
+                       dist_bottom_valid=False, dist_bottom=.1), now, active=True)
+        f.on_att(att(timestamp_sample=stamp), now, active=True)
+        assert f.error(now, .5) is None
+        assert f.range_m == .1

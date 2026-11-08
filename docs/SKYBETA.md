@@ -40,19 +40,28 @@ Command reference for building, bench tests and test flights: [DRONE_TESTING.md]
 The flying policy reads PX4 1.16's unsuffixed `/fmu/out/vehicle_local_position` for fused NED velocity
 and `dist_bottom`, and `/fmu/out/vehicle_attitude` for the FRD-to-NED quaternion. Velocity is rotated
 into body FRD for the observation; the same quaternion supplies roll/pitch and the heading used to
-rotate actions. It does not subscribe to cuVSLAM odometry. `dist_bottom` is PX4's estimated distance
-to the bottom surface, not a raw rangefinder sample. Only valid, finite, positive readings update the
-cached distance. Invalid readings retain the last valid distance indefinitely; before the first valid
-reading, the policy uses `rf_max` (4 m). There is no takeoff-relative altitude fallback. Status includes
-`range_age_s` (null before the first valid reading); range freshness is separate from PX4 stream freshness.
+rotate actions. It does not subscribe to cuVSLAM odometry. Heading readiness accepts either
+`heading_good_for_control`, or fresh `/fmu/out/estimator_status_flags` with `cs_tilt_align` and
+`cs_ev_yaw` true and `cs_ev_yaw_fault`, `fs_bad_hdg`, `reject_yaw` false. PX4 1.16 deliberately leaves
+north yaw alignment false for local-frame vision yaw; that alone must not block this policy.
 
-`feedback_lost_s` defaults to 0.5 s for each PX4 stream. Repeated sample timestamps do not refresh
-the watchdog. Invalid velocity/heading, invalid attitude, estimator reset counters,
-sample-time reversal or a feedback gap during flight latch a hold, even if valid feedback returns
-before the next decision. `state_lost_s` defaults to 0.5 s; stale interface state, disarming, or
-leaving Offboard stops publications permanently, including from hold. Startup requires fresh PX4
-inputs and depth before running inference. Status reports separate local-position, attitude and
-interface-state ages plus a feedback error.
+`dist_bottom` remains filtered bottom distance, not raw range or takeoff-relative altitude. A finite,
+positive value with valid vertical velocity updates the cache if `dist_bottom_valid` is true **or** fresh
+estimator flags show `cs_tilt_align` and `cs_rng_hgt` true, with `cs_rng_fault`, `cs_rng_stuck`, and
+`reject_hagl` false. PX4's range-as-height configuration can have healthy range fusion but invalid terrain.
+The policy requires one accepted distance before starting. After that, invalid readings retain the last
+accepted distance indefinitely, as requested. `range_source`, `range_cached` and `range_age_s` distinguish
+the acceptance path and a held reading. The internal 4 m default is not sufficient for startup.
+
+`feedback_lost_s` defaults to 0.5 s for local position and attitude. Estimator flags have their own
+`estimator_lost_s` (2.5 s), because PX4 publishes them at 1 Hz or immediately on status changes.
+Repeated sample timestamps do not refresh the watchdog. Invalid velocity/heading, invalid attitude,
+estimator resets, sample-time reversal or a feedback gap during flight latch a hold. Stale range-fusion
+flags stop cache updates; range dropouts alone do not hold once a distance has been accepted.
+`state_lost_s` defaults to 0.5 s; stale interface state, disarming, or leaving Offboard stops publications
+permanently, including from hold. Startup requires fresh PX4 inputs and depth. Before Offboard,
+`POLICY START BLOCKED` errors repeat every 5 s with the blocking input; status also reports
+`feedback_error`, `heading_source`, `estimator_age_s`, and the other stream ages.
 
 This does not remove cuVSLAM from the organizer stack: EKF2 may still fuse vision, and `flight_interface`
 still receives its configured cuVSLAM odometry. Handheld mode also still uses cuVSLAM and therefore
