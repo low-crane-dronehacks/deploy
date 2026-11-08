@@ -10,6 +10,7 @@
 
 #include "maze_planning/c_api.h"
 #include "maze_planning/control_mux.hpp"
+#include "maze_planning/course_progress.hpp"
 #include "maze_planning/groundtruth_map.hpp"
 #include "maze_planning/mppi_controller.hpp"
 #include "maze_planning/path_transformer.hpp"
@@ -235,12 +236,99 @@ void testControlMuxAndSafetyInterlocks() {
 
 }  // namespace
 
+// Regression: a replan from mid-course must go start -> remaining anchors -> pad, not loop back through the
+// whole course from the first anchor; and re-delivering the same global path must not reset progress.
+void testRRTStarReplanContinuesFromProgress() {
+  auto gt = std::make_shared<GroundTruthMap>();
+  gt->loadFromBinary("config/course_groundtruth.bin");
+  RRTStarPlanner rrt(RRTStarConfig{}, gt);
+  const Eigen::Vector3d launch(0.9144, -2.5146, -0.78);
+
+  PlannedPath full;
+  std::vector<double> anchor_s;
+  CHECK(rrt.planFullCourse(launch, true, false, full, 0, &anchor_s), "full course plan failed");
+  CHECK(anchor_s.size() == rrt.courseAnchors(true, false).size(), "anchor_s size %zu", anchor_s.size());
+  for (std::size_t i = 1; i < anchor_s.size(); ++i) {
+    CHECK(anchor_s[i] >= anchor_s[i - 1], "anchor arc lengths not monotonic at %zu", i);
+  }
+  const Eigen::Vector3d pad(gt->padCenterNed().x(), gt->padCenterNed().y(), -0.78);
+  CHECK((full.points.back().pos - pad).norm() < 0.05, "course does not end at the pad");
+
+  CourseProgress progress;
+  progress.reset(full, anchor_s, 0);
+  const double s_mid = 0.6 * full.total_length_m;
+  for (double s = 0.0; s <= s_mid; s += 0.1) progress.update(full.sampleByArcLength(s).pos);
+  const Eigen::Vector3d mid = full.sampleByArcLength(s_mid).pos;
+  const std::size_t next = progress.update(mid);
+  CHECK(next > 0 && next < anchor_s.size(), "next anchor %zu after 60%% of the course", next);
+
+  PlannedPath replanned;
+  CHECK(rrt.planFullCourse(mid, true, false, replanned, next), "mid-course replan failed");
+  const double remaining = full.total_length_m - s_mid;
+  CHECK(replanned.total_length_m < remaining + 2.0,
+        "replan len %.2fm vs %.2fm remaining: it loops back through passed anchors",
+        replanned.total_length_m, remaining);
+  CHECK((replanned.points.front().pos - mid).norm() < 0.05, "replan does not start at the vehicle");
+  CHECK((replanned.points.back().pos - pad).norm() < 0.05, "replan does not end at the pad");
+
+  PathTransformer tf;
+  tf.setGlobalPathMap(full);
+  VehicleKinematics st{};
+  st.pos_odom = full.sampleByArcLength(4.0).pos;
+  for (int i = 0; i < 40; ++i) tf.extractLocalReferenceOdom(st);
+  const double s_before = tf.currentArcLengthM();
+  tf.setGlobalPathMap(full);   // same path again
+  CHECK(std::abs(tf.currentArcLengthM() - s_before) < 1e-9, "same path reset progress to %.2f",
+        tf.currentArcLengthM());
+
+  std::printf("[PASS] testRRTStarReplanContinuesFromProgress (next=%zu, replan=%.2fm, remaining=%.2fm)\n",
+              next, replanned.total_length_m, remaining);
+}
+
+void testMPPICandidateRollouts() {
+  auto gt = std::make_shared<GroundTruthMap>();
+  gt->loadFromBinary("config/course_groundtruth.bin");
+  RRTStarPlanner rrt(RRTStarConfig{}, gt);
+  PlannedPath path;
+  rrt.planFullCourse(Eigen::Vector3d(0.9144, -2.5146, -0.78), true, false, path);
+
+  MPPIConfig cfg{};
+  cfg.viz_num_candidates = 64;
+  MPPIController mppi(cfg, MultirotorPlantParams{}, std::make_shared<VoxelCostmap>(VoxelCostmapConfig{}, gt));
+  VehicleKinematics st{};
+  st.pos_odom = path.points.front().pos;
+  mppi.computeCommand(st, path);
+
+  const MPPICandidateSet& c = mppi.lastCandidates();
+  CHECK(c.num_candidates == 64 && c.points_per_candidate == cfg.horizon_steps + 1,
+        "candidates %d x %d", c.num_candidates, c.points_per_candidate);
+  CHECK(c.positions.size() == static_cast<std::size_t>(64 * (cfg.horizon_steps + 1)), "positions size");
+  CHECK((c.positions[0] - st.pos_odom).norm() < 1e-9, "candidate does not start at x0");
+  CHECK(c.max_cost >= c.min_cost && c.min_cost >= mppi.lastMinCost() - 1e-9, "candidate cost range");
+  int distinct = 0;
+  for (int k = 1; k < c.num_candidates; ++k) {
+    if ((c.positions[(k + 1) * c.points_per_candidate - 1] - c.positions[c.points_per_candidate - 1]).norm() > 1e-3) {
+      ++distinct;
+    }
+  }
+  CHECK(distinct > c.num_candidates / 2, "only %d candidates differ from the mean rollout", distinct);
+
+  MPPIController off(MPPIConfig{}, MultirotorPlantParams{});
+  off.computeCommand(st, path);
+  CHECK(off.lastCandidates().num_candidates == 0 && off.lastCandidates().positions.empty(),
+        "viz_num_candidates=0 still stores candidates");
+  std::printf("[PASS] testMPPICandidateRollouts (%d candidates, cost %.1f..%.1f)\n", c.num_candidates,
+              c.min_cost, c.max_cost);
+}
+
 int main() {
   testGroundTruthMapEncoding();
   testVoxelCostmapAndDisparityPunchThroughFMEA();
   testRRTStarPlannerAndBsplineSmoothing();
+  testRRTStarReplanContinuesFromProgress();
   testPathTransformerAndiSAM2ShiftFMEA();
   testMPPI2048RolloutsAndPillarEvasion();
+  testMPPICandidateRollouts();
   testControlMuxAndSafetyInterlocks();
   std::printf(failures ? "%d FAILURE(S)\n" : "ALL MAZE PLANNING (RRT* + MPPI + COSTMAP + MUX) C++ TESTS PASSED\n",
               failures);

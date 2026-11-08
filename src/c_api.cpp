@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "maze_planning/control_mux.hpp"
+#include "maze_planning/course_progress.hpp"
 #include "maze_planning/groundtruth_map.hpp"
 #include "maze_planning/mppi_controller.hpp"
 #include "maze_planning/path_transformer.hpp"
@@ -23,6 +24,19 @@ struct MazePipelineHandle {
   bool prefer_window{true};
   bool include_return_leg{false};
   maze_planning::PlannedPath global_path_map;
+  maze_planning::CourseProgress progress;
+
+  // Plan from start through the anchors still ahead (all of them for a fresh run) and track progress on it.
+  bool planCourse(const Eigen::Vector3d& start_map, std::size_t first_anchor_idx) {
+    std::vector<double> anchor_s;
+    if (!rrt_planner->planFullCourse(start_map, prefer_window, include_return_leg, global_path_map,
+                                     first_anchor_idx, &anchor_s)) {
+      return false;
+    }
+    progress.reset(global_path_map, std::move(anchor_s), first_anchor_idx);
+    path_transformer->setGlobalPathMap(global_path_map);
+    return true;
+  }
 };
 
 extern "C" {
@@ -65,9 +79,7 @@ MazePipelineHandle* maze_pipeline_create(const MazePipelineCConfig* cfg) {
   }
 
   const Eigen::Vector3d start_default(0.9144, -2.5146, -0.78);
-  h->rrt_planner->planFullCourse(start_default, h->prefer_window, h->include_return_leg,
-                                 h->global_path_map);
-  h->path_transformer->setGlobalPathMap(h->global_path_map);
+  h->planCourse(start_default, 0);
   return h;
 }
 
@@ -82,9 +94,7 @@ void maze_pipeline_reset(MazePipelineHandle* h, const double start_pos_map[3]) {
   if (start_pos_map) {
     start = Eigen::Vector3d(start_pos_map[0], start_pos_map[1], start_pos_map[2]);
   }
-  h->rrt_planner->planFullCourse(start, h->prefer_window, h->include_return_leg,
-                                 h->global_path_map);
-  h->path_transformer->setGlobalPathMap(h->global_path_map);
+  h->planCourse(start, 0);
 }
 
 double maze_pipeline_query_groundtruth(const MazePipelineHandle* h,
@@ -200,14 +210,13 @@ void maze_pipeline_step(MazePipelineHandle* h,
   maze_planning::TrajectorySetpointCmd cmd = h->mppi->computeCommand(vk, local_ref);
 
   // 3. FMEA Pillar Dead-Center: if MPPI requests a global replan, mark corridor blocked in RRT* and replan
+  //    from the current pose through the anchors still ahead (not from the first anchor again).
   int replanned = 0;
+  const Eigen::Vector3d cur_map = h->path_transformer->mapToOdomTransform().apply(vk.pos_odom);
+  const std::size_t next_anchor = h->progress.update(cur_map);
   if (cmd.request_global_replan) {
-    const Eigen::Vector3d cur_map =
-        h->path_transformer->mapToOdomTransform().apply(vk.pos_odom);
     h->gt_map->markCorridorBlocked(cmd.blocked_obstacle_pos, 0.36);
-    if (h->rrt_planner->planFullCourse(cur_map, h->prefer_window, h->include_return_leg,
-                                       h->global_path_map)) {
-      h->path_transformer->setGlobalPathMap(h->global_path_map);
+    if (h->planCourse(cur_map, next_anchor)) {
       h->mppi->reset();
       replanned = 1;
     }

@@ -24,23 +24,11 @@ void MPPIController::reset() {
   weights_.assign(static_cast<std::size_t>(cfg_.num_samples), 0.0);
   horizon_refs_.resize(static_cast<std::size_t>(cfg_.horizon_steps));
   optimal_rollout_pos_.clear();
+  candidates_ = MPPICandidateSet{};
   consecutive_stall_ticks_ = 0;
   last_solve_ms_ = 0.0;
   last_min_cost_ = 0.0;
 }
-
-#ifdef HAVE_GTSAM
-void MPPIController::onEstimate(const isam2_depth::MppiInput& in) {
-  const gtsam::Point3 p = in.T_world_body.translation();
-  const gtsam::Quaternion q = in.T_world_body.rotation().toQuaternion();
-  onEstimatorUpdate(
-      in.stamp,
-      Eigen::Vector3d(p.x(), p.y(), p.z()),
-      Eigen::Quaterniond(q.w(), q.x(), q.y(), q.z()),
-      in.v_world,
-      in.distance);
-}
-#endif
 
 void MPPIController::onEstimatorUpdate(
     double stamp_s,
@@ -54,6 +42,11 @@ void MPPIController::onEstimatorUpdate(
   latest_est_state_.q_odom_base = q_ned_frd;
   latest_est_state_.vel_odom = vel_ned;
   latest_est_state_.tracking_valid = true;
+  isam2_grid_ = std::move(distance_grid);
+}
+
+void MPPIController::setLocalDistanceGrid(std::shared_ptr<const isam2_depth::DistanceGrid> distance_grid) {
+  std::lock_guard<std::mutex> lock(est_mutex_);
   isam2_grid_ = std::move(distance_grid);
 }
 
@@ -106,8 +99,8 @@ MultirotorRolloutState MPPIController::stepPlant(const MultirotorRolloutState& s
 double MPPIController::queryClearanceOdom(const Eigen::Vector3d& p_odom) const {
   const Eigen::Vector3d p_map = T_map_odom_.apply(p_odom);
   double d = costmap_ ? costmap_->clearance(p_map) : 2.5;
-  if (isam2_grid_ && isam2_grid_->inside(p_odom)) {
-    d = std::min(d, static_cast<double>(isam2_grid_->distance(p_odom)));
+  if (active_grid_ && active_grid_->inside(p_odom)) {
+    d = std::min(d, static_cast<double>(active_grid_->distance(p_odom)));
   }
   return d;
 }
@@ -171,6 +164,11 @@ TrajectorySetpointCmd MPPIController::computeCommand(
   const auto t_start = std::chrono::steady_clock::now();
   TrajectorySetpointCmd cmd{};
   cmd.timestamp_s = state_odom.timestamp_s;
+  {
+    // The estimator may swap the grid from another thread; sample one consistent grid for this cycle.
+    std::lock_guard<std::mutex> lock(est_mutex_);
+    active_grid_ = isam2_grid_;
+  }
 
   if (local_ref_odom.empty()) {
     cmd.pos_ned = state_odom.pos_odom;
@@ -240,6 +238,15 @@ TrajectorySetpointCmd MPPIController::computeCommand(
   x0.acc_odom = Eigen::Vector3d::Zero();
   x0.yaw_rad = cur_yaw;
 
+  // Candidate rollouts kept for visualization: every `cand_stride`-th sample, so k = 0 (the noise-free
+  // mean sequence) is always one of them.
+  const int n_cand = std::clamp(cfg_.viz_num_candidates, 0, K);
+  const int cand_stride = (n_cand > 0) ? std::max(1, K / n_cand) : 0;
+  candidates_.num_candidates = n_cand;
+  candidates_.points_per_candidate = T + 1;
+  candidates_.positions.resize(static_cast<std::size_t>(n_cand * (T + 1)));
+  candidates_.costs.resize(static_cast<std::size_t>(n_cand));
+
   const double beta = std::clamp(cfg_.noise_corr_beta, 0.0, 0.95);
   const double inv_sqrt = std::sqrt(std::max(1e-4, 1.0 - beta * beta));
 
@@ -258,6 +265,13 @@ TrajectorySetpointCmd MPPIController::computeCommand(
     for (int k = 0; k < K; ++k) {
       MultirotorRolloutState st = x0;
       MPPIControl prev_u = u_mean_[0];
+      const int cand_slot = (cand_stride > 0 && k % cand_stride == 0 && k / cand_stride < n_cand)
+                                ? k / cand_stride
+                                : -1;
+      Eigen::Vector3d* cand_pos = (cand_slot >= 0)
+          ? &candidates_.positions[static_cast<std::size_t>(cand_slot * (T + 1))]
+          : nullptr;
+      if (cand_pos) cand_pos[0] = x0.pos_odom;
       double vx_n = 0.0, vy_n = 0.0, vz_n = 0.0, yr_n = 0.0;
       double total_cost = 0.0;
 
@@ -297,6 +311,7 @@ TrajectorySetpointCmd MPPIController::computeCommand(
         flat_noise_[static_cast<std::size_t>(t * K + k)] = noise_t;
 
         st = stepPlant(st, u_t, cfg_.dt_s);
+        if (cand_pos) cand_pos[t + 1] = st.pos_odom;
         const PathPoint& ref = horizon_refs_[t];
 
         // Critic 1: PathFollowCritic (3D position tracking error)
@@ -357,6 +372,14 @@ TrajectorySetpointCmd MPPIController::computeCommand(
 
   // 4. Softmax importance weights & expectation update
   const double min_cost = *std::min_element(costs_.begin(), costs_.end());
+  if (n_cand > 0) {
+    for (int c = 0; c < n_cand; ++c) {
+      candidates_.costs[static_cast<std::size_t>(c)] = costs_[static_cast<std::size_t>(c * cand_stride)];
+    }
+    const auto [lo, hi] = std::minmax_element(candidates_.costs.begin(), candidates_.costs.end());
+    candidates_.min_cost = *lo;
+    candidates_.max_cost = *hi;
+  }
   last_min_cost_ = min_cost;
   const double inv_lambda = 1.0 / std::max(1e-4, cfg_.lambda);
 

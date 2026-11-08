@@ -5,7 +5,6 @@
 #include <memory>
 #include <string>
 
-#include <geometry_msgs/msg/twist_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #ifdef HAVE_PX4_MSGS
 #include <px4_msgs/msg/offboard_control_mode.hpp>
@@ -51,9 +50,8 @@ class ControlMuxNode : public rclcpp::Node {
         [this](const px4_msgs::msg::VehicleRatesSetpoint::SharedPtr m) { onRatesSetpoint(*m); });
 #endif
     pub_status_ = create_publisher<std_msgs::msg::String>("/control/mux_status", 10);
-    sub_cmd_vel_ = create_subscription<geometry_msgs::msg::TwistStamped>(
-        "/control/cmd_vel", 10,
-        [this](const geometry_msgs::msg::TwistStamped::SharedPtr m) { onCmdVel(*m); });
+    // Only /control/trajectory_setpoint feeds the classical pathway. /control/cmd_vel (same MPPI command
+    // without yaw / position) used to feed it too, so every other command reset the yaw setpoint to 0.
     sub_odom_ = create_subscription<nav_msgs::msg::Odometry>(
         "/odometry/local", rclcpp::SensorDataQoS(),
         [this](const nav_msgs::msg::Odometry::SharedPtr m) { onOdometry(*m); });
@@ -73,15 +71,6 @@ class ControlMuxNode : public rclcpp::Node {
   }
 
  private:
-  void onCmdVel(const geometry_msgs::msg::TwistStamped& m) {
-    TrajectorySetpointCmd cmd{};
-    cmd.timestamp_s = get_clock()->now().seconds();
-    cmd.pos_ned = state_odom_.pos_odom;
-    cmd.vel_ned = Eigen::Vector3d(m.twist.linear.x, m.twist.linear.y, m.twist.linear.z);
-    cmd.yawspeed_rad_s = m.twist.angular.z;
-    mux_.onClassicalCommand(cmd);
-  }
-
 #ifdef HAVE_PX4_MSGS
   void onTrajectorySetpoint(const px4_msgs::msg::TrajectorySetpoint& m) {
     TrajectorySetpointCmd cmd{};
@@ -190,7 +179,6 @@ class ControlMuxNode : public rclcpp::Node {
   rclcpp::Subscription<px4_msgs::msg::VehicleRatesSetpoint>::SharedPtr sub_rates_;
 #endif
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_status_;
-  rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr sub_cmd_vel_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_odom_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_mode_;
 

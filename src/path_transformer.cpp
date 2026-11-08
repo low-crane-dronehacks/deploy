@@ -11,9 +11,19 @@ PathTransformer::PathTransformer(const PathTransformerConfig& cfg) : cfg_(cfg) {
 }
 
 void PathTransformer::setGlobalPathMap(const PlannedPath& path_map) {
+  // The same path delivered again (latched re-delivery, a planner that republishes) must not reset progress
+  // to s = 0: that pulls the reference back to the start of the course. A new plan starts at the vehicle,
+  // so it does start from s = 0.
+  const bool same_path =
+      !global_path_map_.empty() && path_map.points.size() == global_path_map_.points.size() &&
+      (path_map.points.front().pos - global_path_map_.points.front().pos).norm() < 1e-6 &&
+      (path_map.points.back().pos - global_path_map_.points.back().pos).norm() < 1e-6 &&
+      std::abs(path_map.total_length_m - global_path_map_.total_length_m) < 1e-6;
   global_path_map_ = path_map;
-  progress_idx_ = 0;
-  current_s_m_ = 0.0;
+  if (!same_path) {
+    progress_idx_ = 0;
+    current_s_m_ = 0.0;
+  }
 }
 
 void PathTransformer::setMapToOdomTransform(const SE3Transform& T_map_odom) {

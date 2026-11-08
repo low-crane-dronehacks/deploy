@@ -32,10 +32,8 @@ target_link_libraries(maze_planning_core PUBLIC Eigen3::Eigen)
 if(OpenMP_CXX_FOUND)
   target_link_libraries(maze_planning_core PUBLIC OpenMP::OpenMP_CXX)
 endif()
-if(GTSAM_FOUND)
-  target_compile_definitions(maze_planning_core PUBLIC HAVE_GTSAM=1)
-  target_link_libraries(maze_planning_core PUBLIC gtsam)
-endif()
+# maze_planning_core has no GTSAM dependency: the in-process iSAM2 -> MPPI bridge is
+# include/isam2_depth/mppi_sink_adapter.hpp, compiled only by targets that link isam2_depth_core.
 
 include(CTest)
 if(BUILD_TESTING)
@@ -53,6 +51,7 @@ if(ament_cmake_FOUND)
   find_package(std_msgs REQUIRED)
   find_package(geometry_msgs REQUIRED)
   find_package(tf2_ros REQUIRED)
+  find_package(visualization_msgs REQUIRED)
 
   add_executable(rrt_star_planner_node ${SRC_ROOT}/ros/rrt_star_planner_node.cpp)
   target_link_libraries(rrt_star_planner_node maze_planning_core)
@@ -66,25 +65,21 @@ if(ament_cmake_FOUND)
     rclcpp tf2_ros nav_msgs std_msgs geometry_msgs
   )
 
+  # Standalone RViz demo plant (sim_loopback:=true); never alongside SITL or the drone.
+  add_executable(sim_loopback_node ${SRC_ROOT}/ros/sim_loopback_node.cpp)
+  ament_target_dependencies(sim_loopback_node rclcpp tf2_ros nav_msgs geometry_msgs)
+  target_link_libraries(sim_loopback_node Eigen3::Eigen)
+
   add_executable(mppi_controller_node ${SRC_ROOT}/ros/mppi_controller_node.cpp)
   target_link_libraries(mppi_controller_node maze_planning_core)
   ament_target_dependencies(mppi_controller_node
-    rclcpp tf2_ros sensor_msgs nav_msgs std_msgs geometry_msgs
+    rclcpp tf2_ros sensor_msgs nav_msgs std_msgs geometry_msgs visualization_msgs
   )
   if(px4_msgs_FOUND)
     target_compile_definitions(mppi_controller_node PRIVATE HAVE_PX4_MSGS=1)
     ament_target_dependencies(mppi_controller_node px4_msgs)
   endif()
 
-  add_executable(maze_planning_node ${SRC_ROOT}/ros/maze_planning_node.cpp)
-  target_link_libraries(maze_planning_node maze_planning_core)
-  ament_target_dependencies(maze_planning_node
-    rclcpp tf2_ros sensor_msgs nav_msgs std_msgs geometry_msgs
-  )
-  if(px4_msgs_FOUND)
-    target_compile_definitions(maze_planning_node PRIVATE HAVE_PX4_MSGS=1)
-    ament_target_dependencies(maze_planning_node px4_msgs)
-  endif()
 
   ament_export_include_directories(include ${EIGEN3_INCLUDE_DIRS})
   ament_export_libraries(maze_planning_core)
@@ -98,7 +93,7 @@ if(ament_cmake_FOUND)
     rrt_star_planner_node
     path_transformer_node
     mppi_controller_node
-    maze_planning_node
+    sim_loopback_node
     DESTINATION lib/${PROJECT_NAME}
   )
   install(DIRECTORY ${SRC_ROOT}/include/ DESTINATION include)

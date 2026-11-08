@@ -285,7 +285,8 @@ bool RRTStarPlanner::plan(const Eigen::Vector3d& start_map,
   wps = shortcutAndCenterPath(rev, std::max(0.17, radius - 0.02));
   if (out_raw_waypoints) *out_raw_waypoints = wps;
   out_path = smoothWithCubicBSpline(wps, cfg_.cruise_speed_m_s);
-  return (best_goal_cost < std::numeric_limits<double>::infinity()) || wps.size() >= 2;
+  // A path that stops at the tree node closest to the goal is not a plan to the goal.
+  return best_goal_cost < std::numeric_limits<double>::infinity();
 }
 
 std::vector<Eigen::Vector3d> RRTStarPlanner::shortcutAndCenterPath(
@@ -451,33 +452,56 @@ bool RRTStarPlanner::planMultiWaypoint(
     const Eigen::Vector3d& start_map,
     const std::vector<Eigen::Vector3d>& anchor_waypoints_map,
     PlannedPath& out_path,
-    std::vector<Eigen::Vector3d>* out_waypoints) {
+    std::vector<Eigen::Vector3d>* out_waypoints,
+    std::vector<double>* out_anchor_s_m) {
   if (anchor_waypoints_map.empty()) return false;
 
   std::vector<Eigen::Vector3d> combined;
   combined.push_back(start_map);
+  std::vector<std::size_t> anchor_wp_idx;   // index in `combined` where each anchor's leg ends
+  anchor_wp_idx.reserve(anchor_waypoints_map.size());
   Eigen::Vector3d curr = start_map;
 
   for (const auto& anchor : anchor_waypoints_map) {
-    if ((anchor - curr).norm() < 0.08) continue;
+    if ((anchor - curr).norm() < 0.08) {
+      anchor_wp_idx.push_back(combined.size() - 1);
+      continue;
+    }
     PlannedPath leg_path;
     std::vector<Eigen::Vector3d> leg_wps;
-    plan(curr, anchor, leg_path, &leg_wps, cfg_.leg_iterations);
+    bool ok = plan(curr, anchor, leg_path, &leg_wps, cfg_.leg_iterations);
+    if (!ok) ok = plan(curr, anchor, leg_path, &leg_wps, 3 * std::max(cfg_.leg_iterations, cfg_.max_iterations));
+    if (!ok || leg_wps.size() < 2) return false;
     for (std::size_t i = 1; i < leg_wps.size(); ++i) {
       combined.push_back(leg_wps[i]);
     }
     curr = combined.back();
+    anchor_wp_idx.push_back(combined.size() - 1);
   }
 
+  PlannedPath path = smoothWithCubicBSpline(combined, cfg_.cruise_speed_m_s);
+  if (path.empty()) return false;
+
+  if (out_anchor_s_m) {
+    // Uniform clamped cubic B-spline (see smoothWithCubicBSpline): waypoint i is the peak of the basis at
+    // knot u = i + 1, i.e. t = (i + 1) * knot_dt with knot_dt = duration / (n + 1). The last waypoint is at
+    // the end of the clamped curve.
+    out_anchor_s_m->clear();
+    const double n = static_cast<double>(combined.size());
+    const double knot_dt = path.total_duration_s / std::max(1.0, n + 1.0);
+    for (std::size_t wi : anchor_wp_idx) {
+      const double t = (wi + 1 >= combined.size()) ? path.total_duration_s
+                                                   : std::min(path.total_duration_s, (wi + 1.0) * knot_dt);
+      out_anchor_s_m->push_back(path.sampleByTime(t).s_m);
+    }
+  }
   if (out_waypoints) *out_waypoints = combined;
-  out_path = smoothWithCubicBSpline(combined, cfg_.cruise_speed_m_s);
-  return !out_path.empty();
+  out_path = std::move(path);
+  return true;
 }
 
-bool RRTStarPlanner::planFullCourse(const Eigen::Vector3d& start_map,
-                                    bool prefer_window,
-                                    bool include_return_leg,
-                                    PlannedPath& out_path) {
+std::vector<Eigen::Vector3d> RRTStarPlanner::courseAnchors(bool prefer_window,
+                                                           bool include_return_leg) const {
   const double z_cruise = -0.78;
   // Refine gate centers using GroundTruthMap clearance
   const auto& gates = gt_map_->defaultGates();
@@ -498,7 +522,7 @@ bool RRTStarPlanner::planFullCourse(const Eigen::Vector3d& start_map,
   g4.z() = z_cruise;
 
   // Check if the window aperture is blocked (e.g. by FMEA corridor blockage); if so, route via lower door
-  bool use_window = prefer_window && gt_map_->clearance(g4) > (cfg_.robot_radius_m + 0.03);
+  const bool use_window = prefer_window && gt_map_->clearance(g4) > (cfg_.robot_radius_m + 0.03);
   std::vector<Eigen::Vector3d> anchors = {
       Eigen::Vector3d(2.45, -2.42, z_cruise),
       g0,
@@ -523,9 +547,7 @@ bool RRTStarPlanner::planFullCourse(const Eigen::Vector3d& start_map,
     anchors.push_back(Eigen::Vector3d(-1.20, -0.55, z_cruise));
     anchors.push_back(Eigen::Vector3d(-1.20, -1.55, z_cruise));
   }
-  const Eigen::Vector3d pad_hover(
-      gt_map_->padCenterNed().x(), gt_map_->padCenterNed().y(), z_cruise);
-  anchors.push_back(pad_hover);
+  anchors.push_back(Eigen::Vector3d(gt_map_->padCenterNed().x(), gt_map_->padCenterNed().y(), z_cruise));
 
   if (include_return_leg) {
     anchors.push_back(Eigen::Vector3d(-2.35, -0.95, z_cruise));
@@ -543,8 +565,20 @@ bool RRTStarPlanner::planFullCourse(const Eigen::Vector3d& start_map,
     anchors.push_back(Eigen::Vector3d(
         gt_map_->launchMarkNed().x(), gt_map_->launchMarkNed().y(), z_cruise));
   }
+  return anchors;
+}
 
-  return planMultiWaypoint(start_map, anchors, out_path);
+bool RRTStarPlanner::planFullCourse(const Eigen::Vector3d& start_map,
+                                    bool prefer_window,
+                                    bool include_return_leg,
+                                    PlannedPath& out_path,
+                                    std::size_t first_anchor_idx,
+                                    std::vector<double>* out_anchor_s_m) {
+  const std::vector<Eigen::Vector3d> all = courseAnchors(prefer_window, include_return_leg);
+  if (first_anchor_idx >= all.size()) return false;
+  const std::vector<Eigen::Vector3d> remaining(all.begin() + static_cast<std::ptrdiff_t>(first_anchor_idx),
+                                               all.end());
+  return planMultiWaypoint(start_map, remaining, out_path, nullptr, out_anchor_s_m);
 }
 
 bool RRTStarPlanner::blockCorridorAndReplan(
