@@ -57,6 +57,8 @@ class DepthNode(Node):
         self.slop = float(dp('sync_slop_s', 0.005))
         ns_l, ns_r = dp('left_ns', '/oak/left'), dp('right_ns', '/oak/right')
         img_topic = dp('image_topic', 'image_mono')            # skybeta publishes image_mono (mono8) + image_raw (bgr8)
+        # swap_eyes swaps the IMAGES only (mislabelled image topics, correct TF/camera_info)
+        img_ns = {'l': dp('left_image_ns', ns_l), 'r': dp('right_image_ns', ns_r)}
         backend = dp('backend', 'auto')
         if backend == 'external':                 # rectify only; src/vpi_stereo_node.cpp matches (VPI C API)
             self.matcher, self.backend = None, 'external'
@@ -74,7 +76,7 @@ class DepthNode(Node):
         for side, ns in (('l', ns_l), ('r', ns_r)):
             self.create_subscription(CameraInfo, f'{ns}/camera_info', lambda m, s=side: self._on_info(s, m),
                                      qos_profile_sensor_data)
-            self.create_subscription(Image, f'{ns}/{img_topic}', lambda m, s=side: self._on_img(s, m),
+            self.create_subscription(Image, f'{img_ns[side]}/{img_topic}', lambda m, s=side: self._on_img(s, m),
                                      qos_profile_sensor_data)
         self.pub = self.create_publisher(Image, '/policynav/depth/image', qos_profile_sensor_data)
         self.pub_rect = {s: self.create_publisher(Image, f'/policynav/stereo/{s}/image_rect', qos_profile_sensor_data)

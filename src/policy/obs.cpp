@@ -129,10 +129,29 @@ void DepthReprojector::operator()(const float* depth_m, float* out) const {
       }
     }
   }
+  std::vector<unsigned char> vmask(n_out);
   for (std::size_t i = 0; i < n_out; ++i) {
     const double mean = zsum[i] / double(std::max<std::int64_t>(n_ok[i], 1));
     const bool valid = (double(n_ok[i]) >= p_.min_valid * double(std::max<std::int64_t>(n_all[i], 1))) && n_ok[i] > 0;
     out[i] = valid ? float(std::max(0.0, std::min(1.0, mean / p_.far))) : 0.0f;   // invalid -> near
+    vmask[i] = valid;
+  }
+  // edge fill (== obs.py edge_fill): right edge left-to-right, then left edge right-to-left
+  const int n = std::min(p_.edge_fill_cols, W / 2);
+  if (n > 0) {
+    std::vector<int> cols;
+    for (int c = W - n; c < W; ++c) cols.push_back(c);
+    for (int c = n - 1; c >= 0; --c) cols.push_back(c);
+    for (int r = 0; r < p_.out_h; ++r) {
+      const std::size_t row = std::size_t(r) * W;
+      for (int c : cols) {
+        const int src = c >= W - n ? c - 1 : c + 1;
+        if (!vmask[row + c] && vmask[row + src]) {
+          out[row + c] = out[row + src];
+          vmask[row + c] = 1;
+        }
+      }
+    }
   }
 }
 

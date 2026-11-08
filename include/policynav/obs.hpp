@@ -51,6 +51,9 @@ class DepthReprojector {
     double hfov_deg = 72.0, vfov_deg = 50.0;
     double far = 5.0, min_valid = 0.5;
     int stride = 1;   // the nodes use 2
+    // invalid pixels in the outermost N columns take the nearest valid value inward (== policynav/obs.py edge_fill,
+    // sim realism.edge_fill_cols): drone 17's stereo no-match band is on the RIGHT, training's on the LEFT
+    int edge_fill_cols = 16;
   };
   // K = (fx, fy, cx, cy) of the source image; R_body_cam / t_body_cam: optical frame (x right, y down, z forward)
   // -> body FLU, as TF base_link <- camera gives them.
