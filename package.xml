@@ -4,7 +4,7 @@
   <version>0.2.0</version>
   <description>DroneHacks low-crane: trained navigation policy (NumPy) + stereo depth for the skybeta drone, plus
     handheld / SITL / FlyX modes.</description>
-  <maintainer email="low-crane-dronehacks@users.noreply.github.com">low-crane-dronehacks</maintainer>
+  <maintainer email="cbalfour@wpi.edu">Colin Balfour</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
   <buildtool_depend>ament_cmake_python</buildtool_depend>
