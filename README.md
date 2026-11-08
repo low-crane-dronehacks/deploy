@@ -2,8 +2,16 @@
 
 Drone software for DroneHacks 2026: one ROS 2 / PX4 stack that runs **unchanged** on the aircraft, on our
 PX4 SITL rig, and in the organizers' simulator. Only the hardware layer differs (`hardware:=drone|sitl|flyx`).
-Policies are trained in [dronesim](https://github.com/low-crane-dronehacks/dronesim) and exported here as
-NumPy `.npz` files (no torch needed on the drone).
+Policies are trained in [dronesim](https://github.com/low-crane-dronehacks/dronesim) (approach and results:
+[docs/APPROACH.md](https://github.com/low-crane-dronehacks/dronesim/blob/main/docs/APPROACH.md)) and exported
+here as NumPy `.npz` files (no torch needed on the drone). The policy sees only stereo depth and onboard state
+(velocity, attitude, downward range); it gets no position or map input.
+
+**Default policies on this branch:** `launch/skybeta.launch.py` (the real drone) uses
+`policies/c5_s164_1575.npz`; `launch/policynav.launch.py` uses `policies/cur4_clean50_800.npz`. Any export can
+be selected with `policy:=policies/<name>.npz`; [docs/POLICIES.md](docs/POLICIES.md) lists them all and the
+observation/action contract. The branch `policy/holes-v5h3-s196` makes `policies/holes_v5h3_s196_3255.npz`
+the drone default.
 
 ```
 policynav/   policy node: depth + PX4 state -> Offboard velocity setpoints; mission/safety logic (mission.py)
@@ -12,19 +20,18 @@ onboard/     VIO: cuVSLAM wrapper, external-vision bridge to PX4, health (from t
 launch/      policynav.launch.py: hardware:=drone|sitl|flyx, arm:=false|true, policy:=...
 config/      versions.yaml (pinned PX4 / px4_msgs / cuVSLAM), oak.yaml (camera), PX4 params
 sitl/        PX4 SITL rig: Docker, PX4 1.17 + Gazebo Harmonic + uXRCE, our course world
-docker/      Jetson image (todo)
-docs/        SKYBETA.md (the real drone), DRONE_TESTING.md (every test/flight command on the drone), HANDHELD.md, SITL.md, FLYX_LOCAL.md (organizers' sim on pear-omen), POLICIES.md, HARDWARE.md
+docs/        SKYBETA.md (the real drone), DRONE_TESTING.md (every test/flight command on the drone), HANDHELD.md, SITL.md, FLYX_LOCAL.md (organizers' sim on a local workstation), POLICIES.md, HARDWARE.md
 ```
 
 ## Run
 
 ```bash
-# SITL (a lab PC with Docker + NVIDIA runtime)
+# SITL (a desktop with Docker + NVIDIA runtime)
 sitl/run_rig.sh build && sitl/run_rig.sh up          # PX4 + Gazebo + bridges, ~90 s
 sitl/run_rig.sh policy                                # dry run: reports what the policy would command
 sitl/run_rig.sh policy -p arm:=true                   # fly (SPAWN_POSE=x,y,z,r,p,yaw_enu moves the start, BATTERY_SOC=0..1)
 
-# organizers' simulator: hosted workspace, or locally on pear-omen (docs/FLYX_LOCAL.md)
+# organizers' simulator: hosted workspace, or locally (docs/FLYX_LOCAL.md)
 ros2 launch launch/policynav.launch.py hardware:=flyx
 
 # the real drone (organizers' skybeta stack): flight interface + our stereo depth + the policy (docs/SKYBETA.md)
@@ -43,8 +50,8 @@ are in `policynav/mission.py`. `python3 -m pytest -q tests` runs the pure tests.
 ## Status
 
 - [x] policy node, dry-run verified in the organizers' sim and in SITL (actions match training)
-- [x] SITL rig (lab PC), truth-based external vision, 4S battery sag (docs/SITL.md)
-- [x] organizers' sim installed locally on pear-omen; needs the host UDP-buffer sysctl to stay real-time (docs/FLYX_LOCAL.md)
+- [x] SITL rig (Docker), truth-based external vision, 4S battery sag (docs/SITL.md)
+- [x] organizers' sim installed locally; needs the host UDP-buffer sysctl to stay real-time (docs/FLYX_LOCAL.md)
 - [ ] skybeta mode (docs/SKYBETA.md): stereo depth + policy via /skybeta/setpoint/twist; written + pure tests, not yet run on the Jetson
 - [ ] handheld mode (`hardware:=handheld`): written + pure tests; first run on the Jetson/laptop with the OAK
 - [ ] SITL flight; SITL with stereo + cuVSLAM instead of truth

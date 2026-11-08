@@ -10,7 +10,7 @@
 | motors / props | TBD: thrust table (thrust and current vs throttle at 4S) needed | team |
 | arena | 6.10 x 6.10 m net, 3.05 m high; frame of 3.8 cm bars, 5 posts per side, rails at the floor, middle and top | team |
 
-**Training plant** (dronehacks-sim `quad.py`):
+**Training plant** (dronesim `dronehacks/quad.py`):
 - Generic 1.5 kg quad: 0.13 m arm, 0.1-10 N per rotor, a 25-35 ms first-order motor lag.
 - Lee velocity controller.
 - No throttle -> thrust curve: thrust is commanded in newtons directly. A measured motor/prop curve plus

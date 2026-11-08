@@ -1,5 +1,10 @@
 # Autonomous Quadrotor Maze Navigation System: Architecture & Implementation Plan
 
+> **Design plan for the classical stack (branch `isam2`), written before the learned policy was deployed.**
+> The learned-policy path on `main` differs from the "RL Policy Stack" sketched below: it is trained in
+> [dronesim](https://github.com/low-crane-dronehacks/dronesim) (Warp ray-traced depth, Lee velocity
+> controller, rsl_rl PPO) and commands velocity + yaw rate, not body rates. See README.md and AGENT.md.
+
 This document specifies the software architecture, data pipelines, topic structures, design trade-offs, and modular work packages for an autonomous quadrotor navigating a known maze with unknown interior obstacles (e.g., netting walls, support beams, unexpected obstructions). 
 
 It supports two interchangeable execution pathways:

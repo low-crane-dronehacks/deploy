@@ -1,6 +1,6 @@
 """Export the course mesh as a Gazebo (gz-sim Harmonic) world for the local PX4 SITL rig.
 
-    DRONEHACKS_SIM=~/dronehacks-sim python sitl/export_world.py --out sitl/world
+    DRONEHACKS_SIM=/path/to/dronesim python sitl/export_world.py --out sitl/world
 
 Writes world/course.obj (ENU, metres; Gazebo is ENU/FLU, our assets are NED) and world/dronehacks.sdf with the
 course as one static collision+visual mesh, a ground plane, a light, and the PX4 spawn note. The boundary net is
@@ -16,8 +16,9 @@ import sys
 
 import numpy as np
 
-# Needs the training repo (dronehacks-sim) for the course mesh: DRONEHACKS_SIM=/path/to/dronehacks-sim
-SIM = os.environ.get('DRONEHACKS_SIM', os.path.expanduser('~/dronehacks-sim'))
+# Needs the training repo (https://github.com/low-crane-dronehacks/dronesim) for the course mesh:
+# DRONEHACKS_SIM=/path/to/dronesim
+SIM = os.environ.get('DRONEHACKS_SIM', os.path.expanduser('~/dronesim'))
 sys.path.insert(0, SIM)
 from dronehacks.mesh import CourseMesh  # noqa: E402
 

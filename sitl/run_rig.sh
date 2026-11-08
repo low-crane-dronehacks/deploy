@@ -1,5 +1,5 @@
 #!/bin/bash
-# Host-side wrapper (shared lab PC): the container is capped at 8 CPUs, low CPU shares, started only for tests.
+# Host-side wrapper (shared desktop): the container is capped at 8 CPUs, low CPU shares, started only for tests.
 #   run_rig.sh build   build the image (JOBS=8 compile parallelism)
 #   run_rig.sh up      (SPAWN_POSE=x,y,z,roll,pitch,yaw_enu overrides world/spawn.txt; BATTERY_SOC=0..1 pack charge) start the container (detached), then gz + PX4 + agent + bridges
 #   run_rig.sh sh      shell in the running container (ROS sourced)    run_rig.sh policy [ros args]   dry-run policy node

@@ -3,18 +3,18 @@
 FlyX is the organizers' simulator: Isaac Sim 5.1 + Pegasus 5.1 + PX4 SITL + ROS 2 Jazzy + cuVSLAM. It is a
 **held-out sim2sim test**. Evaluate in it, but never tune policies or this stack to it.
 
-**License:** FlyX is proprietary. The organizers allowed local, non-distributed use; the written record is
-kept by Colin. Never commit, push or share the FlyX source or images. Only these instructions live here.
+**License:** FlyX is proprietary. The organizers allowed local, non-distributed use. Never commit, push or
+share the FlyX source or images. Only these instructions live here.
 
 ## Where it runs
-**pear-omen** (RTX 5090, 32 GB, driver 590, Ubuntu 22.04 host):
+A local workstation (RTX 5090, 32 GB, driver 590, Ubuntu 22.04 host):
 - Docker container `flyx`: ubuntu:24.04 with ROS 2 Jazzy, `--init --network host`.
 - `docker.sock` is mounted so the two cuVSLAM images run as sibling containers.
 - Everything lives in the docker volume `flyx_home` (`/var/lib/docker/volumes/flyx_home/_data`).
 - Deviations from their pins (22.04 host, cupy 13.6 + numpy 1.26 in Isaac's python) are listed in `NOTES.md`
   in that volume.
 
-A second lab PC cannot run it: driver 550 < 580, and their native tracker is built for RTX 50-series (SM120).
+It needs NVIDIA driver >= 580, and their native tracker is built for RTX 50-series (SM120).
 
 ## Host prerequisite
 FastDDS needs 16 MB UDP buffers, or sensor frames are dropped and the sim falls to ~0.1x real time. Run this

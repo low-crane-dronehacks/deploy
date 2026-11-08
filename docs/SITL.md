@@ -4,12 +4,12 @@ Evaluation only: tests the policy node on real PX4 software. Never a training ta
 
 **What runs** (one Docker container, `sitl/run_rig.sh`):
 - Gazebo Harmonic, headless with EGL rendering, with our course as the world (`sitl/world/`). The world is
-  exported from dronehacks-sim's mesh by `sitl/export_world.py`.
+  exported from dronesim's course mesh by `sitl/export_world.py`.
 - PX4 SITL v1.17 `gz_x500_depth` (x500 frame, forward depth camera).
 - Micro-XRCE-DDS agent and ROS 2 Jazzy bridges for `/clock`, depth and camera_info.
 - Truth-based external vision (`sitl/ev_bridge.py`): the Gazebo pose plus noise goes to EKF2 in place of VIO.
 
-**Commands** (a lab PC with Docker and the NVIDIA runtime; built and verified on a lab PC):
+**Commands** (a desktop with Docker and the NVIDIA runtime):
 ```bash
 sitl/run_rig.sh build            # once; JOBS=n caps compile parallelism
 sitl/run_rig.sh up               # ~90 s to READY; logs in the container under /tmp/rig/*.log
@@ -20,7 +20,7 @@ sitl/run_rig.sh logs | down
 **Options:**
 - `SPAWN_POSE=x,y,z,roll,pitch,yaw_enu` moves the start. The default is the launch mark (`sitl/world/spawn.txt`).
 - `BATTERY_SOC=0..1` sets the pack's charge at takeoff. The 4S 5000 mAh LiPo model (`sitl/battery.py`,
-  `sitl/battery_4s5000.json`, copied from dronehacks-sim) gives the loaded voltage at hover. The x500 motor
+  `sitl/battery_4s5000.json`, copied from dronesim) gives the loaded voltage at hover. The x500 motor
   constants are scaled by the thrust that voltage leaves, about (V / 16 V)^2.
   - The scaling is static per flight, so a 3-minute run's further sag (~5%) is not modelled.
   - PX4 is told about the pack (`BAT1_*`, `MC_BAT_SCALE_EN 1`), but SITL's own simulated voltage does not

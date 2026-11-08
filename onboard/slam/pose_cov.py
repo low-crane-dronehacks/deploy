@@ -5,7 +5,7 @@ pitch and yaw, not a rotation-vector covariance. E(R) maps Euler coordinate
 increments to a small WORLD rotation. With c = R_W R_A.T p_A, the Jacobian is
 [[R_A, R_A [c]x E(W)], [0, inverse(E(O)) R_A E(W)]]. Output is xyz/Euler-rpy.
 The native SDK's near-gimbal branch discards rotation coordinates: refuse that
-covariance rather than manufacturing certainty. This corrects the previous
+covariance rather than inventing certainty. This corrects the previous
 rotation-vector assumption; see the October27 IMU investigation for evidence.
 """
 from __future__ import annotations

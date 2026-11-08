@@ -28,7 +28,7 @@ until gz topic -l 2>/dev/null | grep -q "^/world/$WORLD/clock"; do sleep 1; done
 IFS=, read -r PX PY PZ PR PP PYAW <<< "$PX4_GZ_MODEL_POSE"
 QZ=$(python3 -c "import math;print(math.sin(${PYAW:-0}/2))"); QW=$(python3 -c "import math;print(math.cos(${PYAW:-0}/2))")
 # Battery: BATTERY_SOC (0..1, default 1.0) sets the pack's state of charge at takeoff. The 4S 5000 mAh LiPo model
-# (sitl/battery.py + sitl/battery_4s5000.json, copied from dronehacks-sim) gives the loaded voltage at hover and the thrust it leaves
+# (sitl/battery.py + sitl/battery_4s5000.json, copied from dronesim) gives the loaded voltage at hover and the thrust it leaves
 # (~(V/V_ref)^2); the x500 motor constants are scaled by that factor in a private copy of the model. Static per
 # flight (a 3-min run drains ~5% more thrust that is not modelled here); PX4 is told about the pack below.
 SOC=${BATTERY_SOC:-1.0}
