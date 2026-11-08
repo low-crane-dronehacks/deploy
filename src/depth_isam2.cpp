@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cmath>
 #include <set>
+#include <unordered_map>
 #include <unordered_set>
 
 #include <gtsam/inference/Symbol.h>
@@ -213,6 +214,34 @@ void DepthIsam2::rebuildOutput(size_t k) {
   for (const auto& kv : estimate_.extract<gtsam::Point3>(gtsam::Symbol::ChrTest('l')))
     out.landmarks[static_cast<int>(gtsam::Symbol(kv.first).index())] = kv.second;
   latest_ = std::move(out);
+}
+
+std::vector<DepthIsam2::KeyframePose> DepthIsam2::keyframePoses() const {
+  std::vector<KeyframePose> out;
+  out.reserve(kfs_.size());
+  for (size_t j = 0; j < kfs_.size(); ++j) out.push_back({kfs_[j].stamp, estimate_.at<gtsam::Pose3>(X(j))});
+  return out;
+}
+
+std::vector<Eigen::Vector3f> DepthIsam2::globalMap(double voxel, int min_hits) const {
+  struct H {
+    size_t operator()(const Eigen::Vector3i& v) const {
+      return (size_t(v.x()) * 73856093u) ^ (size_t(v.y()) * 19349663u) ^ (size_t(v.z()) * 83492791u);
+    }
+  };
+  std::unordered_map<Eigen::Vector3i, int, H> hits;
+  const float inv = 1.0f / static_cast<float>(voxel);
+  for (size_t j = 0; j < kfs_.size(); ++j) {
+    const gtsam::Pose3 Xj = estimate_.at<gtsam::Pose3>(X(j));
+    const Eigen::Matrix3f R = Xj.rotation().matrix().cast<float>();
+    const Eigen::Vector3f t = Xj.translation().cast<float>();
+    for (const auto& q : kfs_[j].map_points) ++hits[((R * q + t) * inv).array().floor().cast<int>()];
+  }
+  std::vector<Eigen::Vector3f> out;
+  out.reserve(hits.size());
+  for (const auto& [key, n] : hits)
+    if (n >= min_hits) out.push_back((key.cast<float>().array() + 0.5f).matrix() * static_cast<float>(voxel));
+  return out;
 }
 
 MppiInput DepthIsam2::predict(const OdomSample& now) const {

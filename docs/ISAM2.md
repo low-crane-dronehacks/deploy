@@ -80,7 +80,29 @@ cmake -S src -B build && cmake --build build && ./build/test_depth_isam2
 
 **Topics:**
 - `~/odometry` (nav_msgs/Odometry at the PX4 rate; covariance reordered to ROS's [trans, rot])
-- `~/obstacles` (PointCloud2 of occupied voxels, per keyframe, for RViz)
+- `~/obstacles` (PointCloud2 of occupied voxels, per keyframe): the local window the MPPI sees
+- `~/keyframes` (nav_msgs/Path, latched): every keyframe pose at its current smoothed value, per keyframe. This is
+  the paper's output, the whole trajectory re-estimated; past poses move when ICP or revisit links correct them.
+- `~/map` (PointCloud2, latched): the whole corrected map. Every keyframe's 5 cm cloud is placed at its smoothed
+  pose; cells with >= `grid_min_hits` points are kept. Rebuilt every `map_publish_period` s (default 1).
+- `~/landmarks` (visualization_msgs/MarkerArray, latched): estimated landmarks, sphere + id. Empty until something
+  feeds landmark observations (e.g. a pad-ring detector); the graph supports them, the node does not produce any.
+
+**Saving the map:** `-p map_save_path:=/path/name` writes it when the node shuts down (Ctrl-C), and
+`ros2 service call /isam2_depth/save_map std_srvs/srv/Trigger` writes it any time (to `map_save_path`, or
+`./isam2_map_<time>` if unset). `name.ply` holds the `~/map` voxels in ENU, z up (the phone-scan convention), and
+`name_keyframes.csv` the smoothed keyframe poses (NED). Spoof test: `map_save:=/tmp/isam2_map`. Compare with the
+course prior: `view_course_scan.py name.ply --mirror no --yaw 0 --tx 0 --ty 0` when the map is already in the course
+frame (spoof test); otherwise `--mirror no` and the yaw/offset found for the PX4 frame. The map is too sparse for the
+automatic search alone (it picked a mirrored fit on a spoof map); the map is right-handed, never pass `--mirror yes`.
+Spoof map vs the prior: median 0.25 m, mostly the as-built differences the scan shows too (walls 0.4-0.7 m off).
+
+All are published only while something subscribes. RViz: fixed frame `isam2_world_ned` (z points down), or a
+`map` (ENU) -> `isam2_world_ned` static transform as the spoof test publishes; `src/test/spoof_isam2.rviz` has
+displays for all of them.
+
+What a keyframe is: a depth frame kept as graph variables X(k), V(k) once PX4 reports 0.25 m, 10 deg or 0.5 s of
+motion since the last one. It keeps its full cloud for ICP (newest 150) and a 5 cm cloud for the maps (always).
 
 The node sends nothing to PX4. It times PX4 samples by their arrival on the node clock (sim time in simulation)
 and interpolates them to the depth header stamp.
@@ -111,7 +133,10 @@ Results (2026-11-07, scan of 2026-11-06, 14.6 m route in 36 s, no revisits after
 | perfect | 0 | 0.06 m / 0.09 m, 0.9 deg rms |
 | 0.5 deg/s yaw bias, 4% scale, 1 cm/sqrt(s) walk | 0.37 m / 0.68 m, 15.5 deg final | 0.14-0.16 m / 0.28-0.32 m, 6.3-6.6 deg final |
 
-Obstacle voxels: median 0.05-0.07 m from the scan surface. Keyframe update 12-20 ms (ICP 1-8 ms, iSAM2 < 0.5 ms).
+Obstacle voxels (local window): median 0.05-0.07 m from the scan surface. Full corrected map (`~/map`, ~64k
+voxels after the route): median 0.058 m, 77% within 10 cm. Smoothed keyframes (`~/keyframes`, the final estimate of
+every past pose) with drift: 0.125-0.130 m rms, 3.0-3.1 deg rms, slightly better than the live estimate was at the
+time (0.135-0.139 m), as smoothing should be. Keyframe update 12-20 ms (ICP 1-8 ms, iSAM2 < 0.5 ms).
 
 Reading: depth cuts the drift by about 2.5x but cannot remove it on a route that does not revisit places; only
 relative constraints exist (ICP between keyframes, revisit links). Absolute correction needs the prior-map factor

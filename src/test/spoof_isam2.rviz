@@ -46,6 +46,50 @@ Visualization Manager:
       Size (m): 0.05
       Alpha: 0.5
       Decay Time: 0
+    - Class: rviz_default_plugins/PointCloud2
+      Name: iSAM2 full corrected map
+      Enabled: true
+      Topic:
+        Value: /isam2_depth/map
+        Depth: 1
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+        History Policy: Keep Last
+      Color Transformer: AxisColor
+      Axis: Z
+      Use Fixed Frame: true
+      Autocompute Value Bounds: false
+      Min Value: 0
+      Max Value: 2.5
+      Style: Boxes
+      Size (m): 0.05
+      Alpha: 0.7
+      Decay Time: 0
+    - Class: rviz_default_plugins/Path
+      Name: iSAM2 smoothed keyframes
+      Enabled: true
+      Topic:
+        Value: /isam2_depth/keyframes
+        Depth: 1
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+        History Policy: Keep Last
+      Color: 255; 255; 255
+      Line Style: Lines
+      Line Width: 0.03
+      Alpha: 1
+      Pose Style: Axes
+      Length: 0.12
+      Radius: 0.012
+    - Class: rviz_default_plugins/MarkerArray
+      Name: iSAM2 landmarks
+      Enabled: true
+      Topic:
+        Value: /isam2_depth/landmarks
+        Depth: 1
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+        History Policy: Keep Last
     - Class: rviz_default_plugins/Path
       Name: Truth path (green)
       Enabled: true

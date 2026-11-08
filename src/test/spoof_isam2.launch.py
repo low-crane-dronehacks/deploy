@@ -3,6 +3,7 @@
     source ~/isam2_ws/install/setup.bash          # px4_msgs + isam2_depth (docs/ISAM2.md)
     ros2 launch src/test/spoof_isam2.launch.py ply:=$PWD/dronehacks-course-scan-2026-11-06.ply
     ros2 launch src/test/spoof_isam2.launch.py ply:=... rviz:=false spoof_args:='--no_drift --csv /tmp/run.csv'
+    ros2 launch src/test/spoof_isam2.launch.py ply:=... map_save:=/tmp/isam2_map    # map at Ctrl-C
 
 No PX4, no vehicle, nothing is armed: the spoofer only publishes fake /fmu/out/* telemetry.
 Use a ROS_DOMAIN_ID of your own on a shared network, so the fake PX4 topics stay on this machine.
@@ -25,7 +26,8 @@ def setup(context):
     extra = shlex.split(LaunchConfiguration('spoof_args').perform(context))
     actions = [
         Node(package='isam2_depth', executable='isam2_depth_node', name='isam2_depth', output='screen',
-             parameters=[{'use_sim_time': True}]),
+             parameters=[{'use_sim_time': True,
+                          'map_save_path': LaunchConfiguration('map_save').perform(context)}]),
         ExecuteProcess(cmd=['/usr/bin/python3', str(HERE / 'spoof_px4_depth.py'), ply, *extra], output='screen'),
     ]
     if LaunchConfiguration('rviz').perform(context).lower() in ('1', 'true', 'yes'):
@@ -39,5 +41,7 @@ def generate_launch_description():
         DeclareLaunchArgument('ply', default_value='', description='course scan (.ply)'),
         DeclareLaunchArgument('rviz', default_value='true'),
         DeclareLaunchArgument('spoof_args', default_value='', description='extra spoof_px4_depth.py arguments'),
+        DeclareLaunchArgument('map_save', default_value='',
+                              description='write the corrected map to <map_save>.ply (+ _keyframes.csv) at shutdown'),
         OpaqueFunction(function=setup),
     ])

@@ -68,6 +68,8 @@ if(ament_cmake_FOUND)
   find_package(std_msgs REQUIRED)
   find_package(geometry_msgs REQUIRED)
   find_package(tf2_ros REQUIRED)
+  find_package(visualization_msgs QUIET)
+  find_package(std_srvs QUIET)
 
   # Dedicated modular ROS 2 nodes matching Section 2.2, 2.3, WP-3, and WP-4:
   #   1. rrt_star_planner_node -> /plan/global_rrt
@@ -131,13 +133,17 @@ if(ament_cmake_FOUND)
     DESTINATION lib/${PROJECT_NAME}
   )
 
-  if(GTSAM_FOUND AND px4_msgs_FOUND)
+  if(GTSAM_FOUND AND px4_msgs_FOUND AND visualization_msgs_FOUND AND std_srvs_FOUND)
     add_executable(isam2_depth_node ros/isam2_depth_node.cpp)
     target_link_libraries(isam2_depth_node isam2_depth_core maze_planning_core)
     ament_target_dependencies(isam2_depth_node
-      rclcpp tf2_ros sensor_msgs nav_msgs px4_msgs
+      rclcpp tf2_ros sensor_msgs nav_msgs px4_msgs visualization_msgs std_srvs
     )
     install(TARGETS isam2_depth_node DESTINATION lib/${PROJECT_NAME})
+  else()
+    message(WARNING "isam2_depth_node NOT built: needs GTSAM 4.2 (found: ${GTSAM_FOUND}; set GTSAM_DIR, e.g. "
+                    "/opt/ros/jazzy/lib/cmake/GTSAM), px4_msgs (${px4_msgs_FOUND}, build it first: "
+                    "colcon build --packages-up-to isam2_depth) visualization_msgs (${visualization_msgs_FOUND}) and std_srvs (${std_srvs_FOUND})")
   endif()
 
   install(DIRECTORY include/ DESTINATION include)

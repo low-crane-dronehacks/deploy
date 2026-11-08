@@ -429,7 +429,7 @@ def run_ros(args, pts, rgb, tree, traj, est, renderer):
     info.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
     info.d = [0.0] * 5
 
-    rows, obstacle_cloud, lock = [], [None], threading.Lock()
+    rows, obstacle_cloud, map_cloud, kf_path, lock = [], [None], [None], [None], threading.Lock()
     isam_path = PathMsg(header=Header(frame_id=world))
     px4_path = PathMsg(header=Header(frame_id=world))
 
@@ -453,6 +453,8 @@ def run_ros(args, pts, rgb, tree, traj, est, renderer):
 
     node.create_subscription(Odometry, '/isam2_depth/odometry', on_odom, 50)
     node.create_subscription(PointCloud2, '/isam2_depth/obstacles', on_obst, 1)
+    node.create_subscription(PointCloud2, '/isam2_depth/map', lambda m: map_cloud.__setitem__(0, m), latched)
+    node.create_subscription(PathMsg, '/isam2_depth/keyframes', lambda m: kf_path.__setitem__(0, m), latched)
     exe = SingleThreadedExecutor()
     exe.add_node(node)
     spin = threading.Thread(target=exe.spin, daemon=True)
@@ -487,13 +489,26 @@ def run_ros(args, pts, rgb, tree, traj, est, renderer):
                        header='t,truth_n,truth_e,truth_d,truth_yaw,px4_n,px4_e,px4_d,px4_yaw,'
                               'isam2_n,isam2_e,isam2_d,isam2_yaw')
             print(f'  rows written to {args.csv}')
-        oc = obstacle_cloud[0]
-        if oc is not None:
+        for name, oc in (('obstacle voxels (local window)', obstacle_cloud[0]), ('full map', map_cloud[0])):
+            if oc is None:
+                continue
             xyz = point_cloud2.read_points_numpy(oc, field_names=('x', 'y', 'z'))
             if len(xyz):
                 d = tree.query(xyz.astype(np.float64))[0]
-                print(f'  obstacle voxels: {len(xyz)}, distance to the scan median {np.median(d):.3f} m, '
-                      f'{100 * np.mean(d < 0.1):.0f}% within 10 cm (voxel {0.05:.2f} m)')
+                print(f'  {name}: {len(xyz)} voxels, distance to the scan median {np.median(d):.3f} m, '
+                      f'{100 * np.mean(d < 0.1):.0f}% within 10 cm')
+        kp = kf_path[0]
+        if kp is not None and kp.poses:
+            e_kf, y_kf = [], []
+            for ps in kp.poses:
+                i = interp_truth(ps.header.stamp.sec + 1e-9 * ps.header.stamp.nanosec)
+                q = ps.pose.orientation
+                e_kf.append(np.linalg.norm(np.array([ps.pose.position.x, ps.pose.position.y, ps.pose.position.z])
+                                           - p[i]))
+                y_kf.append(abs(math.degrees(wrap(yaw_of(Rotation.from_quat([q.x, q.y, q.z, q.w]).as_matrix())
+                                                  - yaw_of(R[i])))))
+            print(f'  smoothed keyframes ({len(e_kf)}, final estimate of every past pose): position rms '
+                  f'{rms(e_kf):.3f} max {max(e_kf):.3f} m, yaw rms {rms(y_kf):.2f} deg')
 
     print(f'spoofing {t_arr[-1]:.0f} s of sim time at {args.rtf}x real time; Ctrl-C to stop')
     depth_period, px4_every = 1.0 / args.depth_hz, max(1, int(round(1.0 / (args.px4_hz * dt))))
@@ -548,7 +563,8 @@ def run_ros(args, pts, rgb, tree, traj, est, renderer):
         report(final=True)
     except KeyboardInterrupt:
         report(final=True)
-    exe.shutdown()
+    exe.shutdown(timeout_sec=2.0)       # stop spinning and join the thread before tearing the node down
+    spin.join(timeout=2.0)
     node.destroy_node()
     rclpy.try_shutdown()
 

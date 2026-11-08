@@ -5,17 +5,32 @@
 //        PX4            /fmu/out/vehicle_local_position_v1 (NED position / velocity), /fmu/out/vehicle_attitude
 //   out  ~/odometry     nav_msgs/Odometry at the PX4 rate: newest keyframe estimate + PX4 motion since
 //                       (pose world NED <- body FRD; twist in the body frame, as nav_msgs defines it)
-//        ~/obstacles    sensor_msgs/PointCloud2 of occupied distance-field voxels (world NED), per keyframe
+//        ~/obstacles    sensor_msgs/PointCloud2 of occupied distance-field voxels (world NED), per keyframe: the
+//                       local window the MPPI sees (map_radius / grid extent around the vehicle)
+//        ~/keyframes    nav_msgs/Path of ALL keyframe poses at their current smoothed values, per keyframe
+//                       (iSAM2 keeps re-estimating past poses; watch them move when ICP / revisits correct them)
+//        ~/map          sensor_msgs/PointCloud2: the whole corrected map, every keyframe cloud at its smoothed pose,
+//                       map_voxel cells with >= grid_min_hits points (world NED), every map_publish_period s
+//        ~/landmarks    visualization_msgs/MarkerArray: estimated landmarks (sphere + id), per keyframe
+//        All of these are published only while something subscribes; ~/keyframes and ~/map are latched.
+//   save ~/save_map     std_srvs/Trigger: write the corrected map now; also written at shutdown if map_save_path is
+//                       set. <path>.ply = the ~/map voxels as binary PLY in ENU, z up (east, north, up; the same
+//                       convention as a phone scan, so ego_planner/scripts/view_course_scan.py reads it), and
+//                       <path>_keyframes.csv = the smoothed keyframe poses (NED, as ~/keyframes).
 //        MppiStateSink  in-process: setSink() and the MPPI gets MppiInput (state + DistanceGrid) at the PX4 rate
 // Publishes nothing to PX4 and never arms.
 #include <cmath>
 #include <cstring>
+#include <ctime>
+#include <fstream>
 #include <deque>
 #include <limits>
 #include <memory>
 #include <optional>
+#include <vector>
 
 #include <nav_msgs/msg/odometry.hpp>
+#include <nav_msgs/msg/path.hpp>
 #include <px4_msgs/msg/vehicle_attitude.hpp>
 #include <px4_msgs/msg/vehicle_local_position.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -23,8 +38,10 @@
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
+#include <std_srvs/srv/trigger.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
+#include <visualization_msgs/msg/marker_array.hpp>
 
 #include "isam2_depth/depth_isam2.hpp"
 
@@ -40,6 +57,8 @@ class Isam2DepthNode : public rclcpp::Node {
     body_frame_ = declare_parameter<std::string>("body_frame", "isam2_body_frd");
     publish_obstacles_ = declare_parameter("publish_obstacles", true);
     max_odom_gap_ = declare_parameter("max_odom_gap", 0.1);   // s: a depth frame needs PX4 data this close
+    map_period_ = declare_parameter("map_publish_period", 1.0);   // s between ~/map rebuilds (cost grows with keyframes)
+    map_save_path_ = declare_parameter<std::string>("map_save_path", "");   // "" = do not save at shutdown
     loadParams();
 
     tf_buffer_ = std::make_unique<tf2_ros::Buffer>(get_clock());
@@ -57,6 +76,15 @@ class Isam2DepthNode : public rclcpp::Node {
         depth_topic_, rclcpp::SensorDataQoS(), [this](sensor_msgs::msg::Image::ConstSharedPtr m) { onDepth(*m); });
     pub_odom_ = create_publisher<nav_msgs::msg::Odometry>("~/odometry", 10);
     pub_obst_ = create_publisher<sensor_msgs::msg::PointCloud2>("~/obstacles", 1);
+    const auto latched = rclcpp::QoS(1).reliable().transient_local();   // RViz joining late still gets the last one
+    pub_kf_ = create_publisher<nav_msgs::msg::Path>("~/keyframes", latched);
+    pub_map_ = create_publisher<sensor_msgs::msg::PointCloud2>("~/map", latched);
+    pub_lm_ = create_publisher<visualization_msgs::msg::MarkerArray>("~/landmarks", latched);
+    srv_save_ = create_service<std_srvs::srv::Trigger>(
+        "~/save_map", [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+                             std::shared_ptr<std_srvs::srv::Trigger::Response> res) {
+          res->success = saveMap(map_save_path_, &res->message);
+        });
     timer_ = create_wall_timer(std::chrono::seconds(5), [this] { logStats(); });
     RCLCPP_INFO(get_logger(), "depth %s, PX4 vehicle_local_position_v1 + vehicle_attitude; no commands are sent",
                 depth_topic_.c_str());
@@ -201,6 +229,13 @@ class Isam2DepthNode : public rclcpp::Node {
     }
     if (!est_->addFrame(*frame, *odom)) return;
     if (publish_obstacles_ && pub_obst_->get_subscription_count() > 0) publishObstacles(m.header.stamp);
+    if (pub_kf_->get_subscription_count() > 0) publishKeyframes(m.header.stamp);
+    if (pub_lm_->get_subscription_count() > 0) publishLandmarks(m.header.stamp);
+    const double t = rclcpp::Time(m.header.stamp).seconds();
+    if (pub_map_->get_subscription_count() > 0 && (t - last_map_ >= map_period_ || t < last_map_)) {
+      last_map_ = t;
+      publishCloud(*pub_map_, est_->globalMap(p_.map_voxel, p_.grid.min_hits), m.header.stamp);
+    }
   }
 
   void publishOdometry(const MppiInput& in) {
@@ -208,11 +243,7 @@ class Isam2DepthNode : public rclcpp::Node {
     o.header.stamp = rclcpp::Time(static_cast<int64_t>(in.stamp * 1e9), get_clock()->get_clock_type());
     o.header.frame_id = world_frame_;
     o.child_frame_id = body_frame_;
-    const gtsam::Point3 p = in.T_world_body.translation();
-    const gtsam::Quaternion q = in.T_world_body.rotation().toQuaternion();
-    o.pose.pose.position.x = p.x(); o.pose.pose.position.y = p.y(); o.pose.pose.position.z = p.z();
-    o.pose.pose.orientation.w = q.w(); o.pose.pose.orientation.x = q.x();
-    o.pose.pose.orientation.y = q.y(); o.pose.pose.orientation.z = q.z();
+    setPose(o.pose.pose, in.T_world_body);
     const gtsam::Vector3 vb = in.T_world_body.rotation().unrotate(gtsam::Point3(in.v_world));
     o.twist.twist.linear.x = vb.x(); o.twist.twist.linear.y = vb.y(); o.twist.twist.linear.z = vb.z();
     // GTSAM orders the pose tangent [rot, trans]; ROS wants [trans, rot] (both in the body frame here)
@@ -225,8 +256,11 @@ class Isam2DepthNode : public rclcpp::Node {
 
   void publishObstacles(const builtin_interfaces::msg::Time& stamp) {
     const auto& g = est_->latest().distance;
-    if (!g) return;
-    const auto pts = g->occupiedCentres();
+    if (g) publishCloud(*pub_obst_, g->occupiedCentres(), stamp);
+  }
+
+  void publishCloud(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>& pub, const std::vector<Eigen::Vector3f>& pts,
+                    const builtin_interfaces::msg::Time& stamp) {
     sensor_msgs::msg::PointCloud2 c;
     c.header.stamp = stamp;
     c.header.frame_id = world_frame_;
@@ -238,9 +272,113 @@ class Isam2DepthNode : public rclcpp::Node {
       *x = q.x(); *y = q.y(); *z = q.z();
       ++x; ++y; ++z;
     }
-    pub_obst_->publish(c);
+    pub.publish(c);
   }
 
+  builtin_interfaces::msg::Time toStamp(double t) const {
+    return rclcpp::Time(static_cast<int64_t>(t * 1e9), get_clock()->get_clock_type());
+  }
+
+  static void setPose(geometry_msgs::msg::Pose& out, const gtsam::Pose3& T) {
+    const gtsam::Point3 p = T.translation();
+    const gtsam::Quaternion q = T.rotation().toQuaternion();
+    out.position.x = p.x(); out.position.y = p.y(); out.position.z = p.z();
+    out.orientation.w = q.w(); out.orientation.x = q.x(); out.orientation.y = q.y(); out.orientation.z = q.z();
+  }
+
+  void publishKeyframes(const builtin_interfaces::msg::Time& stamp) {
+    nav_msgs::msg::Path path;
+    path.header.stamp = stamp;
+    path.header.frame_id = world_frame_;
+    for (const auto& kf : est_->keyframePoses()) {
+      geometry_msgs::msg::PoseStamped ps;
+      ps.header.stamp = toStamp(kf.stamp);
+      ps.header.frame_id = world_frame_;
+      setPose(ps.pose, kf.T_world_body);
+      path.poses.push_back(ps);
+    }
+    pub_kf_->publish(path);
+  }
+
+  void publishLandmarks(const builtin_interfaces::msg::Time& stamp) {
+    visualization_msgs::msg::MarkerArray arr;
+    visualization_msgs::msg::Marker clear;
+    clear.header.frame_id = world_frame_;
+    clear.action = visualization_msgs::msg::Marker::DELETEALL;   // ids can disappear if the graph is reset
+    arr.markers.push_back(clear);
+    for (const auto& [id, p] : est_->latest().landmarks) {
+      visualization_msgs::msg::Marker m;
+      m.header.stamp = stamp;
+      m.header.frame_id = world_frame_;
+      m.ns = "landmark";
+      m.id = id;
+      m.type = visualization_msgs::msg::Marker::SPHERE;
+      m.action = visualization_msgs::msg::Marker::ADD;
+      m.pose.position.x = p.x(); m.pose.position.y = p.y(); m.pose.position.z = p.z();
+      m.pose.orientation.w = 1.0;
+      m.scale.x = m.scale.y = m.scale.z = 0.15;
+      m.color.r = 1.0f; m.color.g = 0.0f; m.color.b = 1.0f; m.color.a = 0.9f;
+      arr.markers.push_back(m);
+      visualization_msgs::msg::Marker label = m;
+      label.ns = "landmark_id";
+      label.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+      label.text = "L" + std::to_string(id);
+      label.pose.position.z -= 0.2;   // NED: 0.2 m above the sphere
+      label.scale.x = label.scale.y = 0.0;
+      label.scale.z = 0.12;
+      label.color.r = label.color.g = label.color.b = 1.0f;
+      arr.markers.push_back(label);
+    }
+    pub_lm_->publish(arr);
+  }
+
+  // Writes <base>.ply + <base>_keyframes.csv; base "" -> ./isam2_map_<local time>. Returns false if nothing to save.
+  bool saveMap(std::string base, std::string* msg = nullptr) {
+    auto fail = [&](const std::string& why) {
+      if (msg) *msg = why;
+      RCLCPP_WARN(get_logger(), "map not saved: %s", why.c_str());
+      return false;
+    };
+    if (!est_ || !est_->initialised()) return fail("no keyframes yet");
+    if (base.empty()) {
+      char buf[32];
+      const std::time_t now = std::time(nullptr);
+      std::strftime(buf, sizeof buf, "%Y%m%d_%H%M%S", std::localtime(&now));
+      base = std::string("isam2_map_") + buf;
+    }
+    if (base.size() > 4 && base.compare(base.size() - 4, 4, ".ply") == 0) base.resize(base.size() - 4);
+    const auto pts = est_->globalMap(p_.map_voxel, p_.grid.min_hits);
+    std::ofstream ply(base + ".ply", std::ios::binary);
+    if (!ply) return fail("cannot write " + base + ".ply");
+    ply << "ply\nformat binary_little_endian 1.0\n"
+        << "comment isam2_depth corrected map: voxel " << p_.map_voxel << " m, min_hits " << p_.grid.min_hits << "\n"
+        << "comment frame ENU z up: x = east (NED y), y = north (NED x), z = up (-NED z), origin = PX4 local origin\n"
+        << "element vertex " << pts.size() << "\nproperty float x\nproperty float y\nproperty float z\nend_header\n";
+    for (const auto& q : pts) {
+      const float v[3] = {q.y(), q.x(), -q.z()};
+      ply.write(reinterpret_cast<const char*>(v), sizeof v);
+    }
+    std::ofstream csv(base + "_keyframes.csv");
+    csv << "stamp,x_ned,y_ned,z_ned,qw,qx,qy,qz\n";
+    for (const auto& kf : est_->keyframePoses()) {
+      const auto p = kf.T_world_body.translation();
+      const auto q = kf.T_world_body.rotation().toQuaternion();
+      csv << std::fixed << kf.stamp << ',' << p.x() << ',' << p.y() << ',' << p.z() << ',' << q.w() << ','
+          << q.x() << ',' << q.y() << ',' << q.z() << '\n';
+    }
+    const std::string ok = "saved " + std::to_string(pts.size()) + " voxels to " + base + ".ply and " +
+                           std::to_string(est_->keyframePoses().size()) + " keyframes to " + base + "_keyframes.csv";
+    RCLCPP_INFO(get_logger(), "%s", ok.c_str());
+    if (msg) *msg = ok;
+    return true;
+  }
+
+ public:
+  void saveOnExit() {
+    if (!map_save_path_.empty()) saveMap(map_save_path_);
+  }
+
+ private:
   void logStats() {
     if (!est_) return;
     const auto& s = est_->stats();
@@ -253,6 +391,9 @@ class Isam2DepthNode : public rclcpp::Node {
   std::string depth_topic_, info_topic_, base_frame_, world_frame_, body_frame_;
   bool publish_obstacles_ = true;
   double max_odom_gap_ = 0.1;
+  double map_period_ = 1.0, last_map_ = -1e18;
+  std::string map_save_path_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_save_;
   std::optional<PinholeCamera> cam_;
   std::optional<gtsam::Rot3> q_;
   std::deque<OdomSample> odom_;
@@ -265,7 +406,9 @@ class Isam2DepthNode : public rclcpp::Node {
   rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr sub_info_;
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr sub_depth_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom_;
-  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_obst_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_obst_, pub_map_;
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_kf_;
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_lm_;
   rclcpp::TimerBase::SharedPtr timer_;
 };
 
@@ -276,6 +419,7 @@ int main(int argc, char** argv) {
   auto node = std::make_shared<isam2_depth::Isam2DepthNode>();
   // MPPI: node->setSink(std::make_shared<YourMppi>(...));
   rclcpp::spin(node);
+  node->saveOnExit();   // after Ctrl-C: the estimator is plain C++, still valid here
   rclcpp::shutdown();
   return 0;
 }

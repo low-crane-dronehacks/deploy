@@ -90,6 +90,18 @@ class DepthIsam2 {
   const Stats& stats() const { return stats_; }
   const gtsam::Values& estimate() const { return estimate_; }
 
+  // The full smoothed estimate (paper: every past pose, not only the newest), for visualisation / logging.
+  struct KeyframePose {
+    double stamp;
+    gtsam::Pose3 T_world_body;   // world NED <- body FRD, current smoothed value
+  };
+  std::vector<KeyframePose> keyframePoses() const;
+  // The whole corrected map: every keyframe's downsampled cloud placed at its CURRENT smoothed pose, merged into
+  // `voxel` cells; a cell is kept if at least `min_hits` keyframe points fall in it. Voxel centres, world NED.
+  // Unlike latest().distance (map_radius / grid window around the vehicle), this covers everything seen.
+  // Cost grows with the number of keyframes (~1M points at a few hundred): call it at ~1 Hz, not per frame.
+  std::vector<Eigen::Vector3f> globalMap(double voxel, int min_hits) const;
+
  private:
   struct Keyframe {
     double stamp;
