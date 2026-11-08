@@ -19,7 +19,7 @@ import xml.etree.ElementTree as ET
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, LogInfo, OpaqueFunction
-from launch.conditions import LaunchConfigurationEquals, LaunchConfigurationNotEquals
+from launch.conditions import IfCondition, LaunchConfigurationEquals
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
@@ -35,7 +35,8 @@ ARGUMENTS = [
     # ours
     ('mode', 'fly', 'fly | handheld (props off: no flight interface, no setpoints)'),
     ('policy', 'policies/anneal_slow_b128_3255.npz', 'exported policy (.npz), relative to the package share'),
-    ('stereo_backend', 'vpi', 'vpi (C++ vpi_stereo, CUDA census+SGM) | sgbm (OpenCV, CPU, ~29 ms at 640x400 on 6 cores)'),
+    ('stereo_backend', 'vpi', 'vpi (C++ vpi_stereo, CUDA census+SGM) | sgbm (OpenCV, CPU, ~29 ms at 640x400 on 6 cores) | '
+                              'none (no stereo node: something else publishes /policynav/depth/*, e.g. the SITL rig)'),
     ('max_disparity', '96', 'stereo search range at 640 px: min range = f*B/max (~0.33 m at 96, 0.40 m at 80)'),
     ('depth_rate_hz', '13.5', 'stereo rate, averaged by camera stamps (training models 13.5-15 Hz frames)'),
     ('speed_cap', '1.45', 'our own cap on |v| (m/s), under the interface clamp'),
@@ -113,7 +114,8 @@ def nodes(context):
     )
     depth = Node(
         package='policynav', executable='stereo_depth', name='policynav_depth', prefix=prefix, output='screen', emulate_tty=True, additional_env=ours,
-        condition=LaunchConfigurationNotEquals('stereo_backend', 'vpi'),    # vpi: vpi_stereo rectifies + matches in C++
+        # vpi: vpi_stereo rectifies + matches in C++; none: depth comes from elsewhere (sitl/gz_depth.py)
+        condition=IfCondition(PythonExpression(["'", lc('stereo_backend'), "' not in ('vpi', 'none')"])),
         parameters=[{'backend': PythonExpression(["'external' if '", lc('stereo_backend'), "' == 'vpi' else '",
                                                   lc('stereo_backend'), "'"]),
                      'max_disparity': lc('max_disparity'), 'rate_hz': lc('depth_rate_hz')}],

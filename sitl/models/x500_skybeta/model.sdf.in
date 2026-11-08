@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  x500_skybeta: PX4's x500 (v1.16.2 Tools/simulation/gz/models) + what the skybeta airframe senses.
+  Rendered by sitl/rig_entry.sh into /tmp/rig/models/x500_skybeta/model.sdf; @NAME@ placeholders are filled from the env.
+
+  camera   depth camera on the OAK mount, 640x400, 74.7 x 51 deg: the geometry our stereo pipeline outputs on the drone
+           (docs/SKYBETA.md, stereo_depth: fx ~420 at alpha 0). Mount pose = CAMERA_X/Y/Z/ROLL/PITCH/YAW (FLU, metres,
+           radians; the same keys as skybeta's /etc/skybeta/drone.env). sitl/gz_depth.py publishes the matching static TF.
+  range    downward single-beam laser, 4 m max like the VL53L1X. PX4's gz_bridge maps the scan on
+           lidar_sensor_link/sensor/lidar to distance_sensor (GZBridge.cpp, laserScantoLidarSensorCallback), so
+           EKF2_HGT_REF=2 (range) works as on the drone. Link and sensor names must stay as they are.
+-->
+<sdf version='1.9'>
+  <model name='x500_skybeta'>
+    <self_collide>false</self_collide>
+    <include merge='true'>
+      <uri>model://x500</uri>
+    </include>
+
+    <link name="sim_camera_link">
+      <pose relative_to="base_link">@CAMERA_X@ @CAMERA_Y@ @CAMERA_Z@ @CAMERA_ROLL@ @CAMERA_PITCH@ @CAMERA_YAW@</pose>
+      <inertial><mass>0.005</mass><inertia><ixx>1e-5</ixx><iyy>1e-5</iyy><izz>1e-5</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia></inertial>
+      <sensor name="depth" type="depth_camera">
+        <camera>
+          <horizontal_fov>1.30376</horizontal_fov>
+          <image><width>640</width><height>400</height><format>R_FLOAT32</format></image>
+          <clip><near>@DEPTH_NEAR@</near><far>@DEPTH_FAR@</far></clip>
+        </camera>
+        <always_on>1</always_on>
+        <update_rate>@DEPTH_RATE@</update_rate>
+        <visualize>false</visualize>
+        <topic>skybeta_sim/depth</topic>
+      </sensor>
+    </link>
+    <joint name="sim_camera_joint" type="fixed">
+      <parent>base_link</parent>
+      <child>sim_camera_link</child>
+    </joint>
+
+    <link name="lidar_sensor_link">
+      <pose relative_to="base_link">0 0 -0.05 0 1.5707963 0</pose>
+      <inertial><mass>0.001</mass><inertia><ixx>1e-5</ixx><iyy>1e-5</iyy><izz>1e-5</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia></inertial>
+      <sensor name="lidar" type="gpu_lidar">
+        <pose>0 0 0 3.14159 0 0</pose>
+        <update_rate>50</update_rate>
+        <ray>
+          <scan>
+            <horizontal><samples>1</samples><resolution>1</resolution><min_angle>0</min_angle><max_angle>0</max_angle></horizontal>
+            <vertical><samples>1</samples><resolution>1</resolution><min_angle>0</min_angle><max_angle>0</max_angle></vertical>
+          </scan>
+          <range><min>0.04</min><max>4.0</max><resolution>0.001</resolution></range>
+        </ray>
+        <always_on>1</always_on>
+        <visualize>false</visualize>
+      </sensor>
+    </link>
+    <joint name="lidar_sensor_joint" type="fixed">
+      <parent>base_link</parent>
+      <child>lidar_sensor_link</child>
+    </joint>
+  </model>
+</sdf>

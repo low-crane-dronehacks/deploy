@@ -6,3 +6,10 @@ micro_xrce_dds_agent: v3.0.1
 ros: jazzy
 cuvslam: 17.0.0                # organizers' sim (x86 cu12 wheel); the Jetson needs the matching ARM / JetPack build
 oak_d: OAK-D S2                # passive stereo (no IR projector), 640x400 mono pair, ~7.5 cm baseline
+
+# sitl/ (the skybeta drone's software path; docs/SITL.md). The drone runs these, not the 1.17 / Jazzy set above.
+sitl_px4_firmware: v1.16.2       # sitl/PX4-Autopilot submodule; the fleet FCs run v1.16.2-1-g7a39c59 (NuttX UART fix only)
+sitl_px4_msgs: release/1.16      # what skybeta's image pins
+sitl_micro_xrce_dds_agent: v2.4.3
+sitl_ros: humble
+sitl_gazebo: harmonic            # gz-sim 8 (PX4 v1.16 minimum)

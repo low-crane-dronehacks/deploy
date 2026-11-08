@@ -4,3 +4,4 @@ __pycache__/
 *.mcap
 *.db3
 .pytest_cache/
+sitl/.cache/

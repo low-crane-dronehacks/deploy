@@ -19,7 +19,7 @@ from launch.substitutions import LaunchConfiguration
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 PROFILES = {
-    # sitl: sitl/run_rig.sh up provides PX4 SITL + uXRCE (UDP) + depth relay + truth-based external vision
+    # sitl: the PX4 1.17 / Jazzy rig this profile was written for is gone; sitl/ now runs PX4 v1.16.2 with skybeta.launch.py
     'sitl': dict(use_sim_time=True, range_source='altitude', depth_topic='/camera/depth/image_raw',
                  depth_info_topic='/camera/depth/camera_info'),
     # flyx: the organizers' simulator provides PX4, cuVSLAM (onboard/) and the OAK depth topics already

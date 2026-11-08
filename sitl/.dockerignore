@@ -1,0 +1,4 @@
+# The PX4 tree (~3 GB) is bind-mounted at run time, not baked into the image; only its pip requirements are needed.
+PX4-Autopilot
+!PX4-Autopilot/Tools/setup/requirements.txt
+.cache

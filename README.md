@@ -11,7 +11,7 @@ policies/    exported policies (.npz)   python -m dronehacks.export_policy <ckpt
 onboard/     VIO: cuVSLAM wrapper, external-vision bridge to PX4, health (from the organizers' workspace)
 launch/      policynav.launch.py: hardware:=drone|sitl|flyx, arm:=false|true, policy:=...
 config/      versions.yaml (pinned PX4 / px4_msgs / cuVSLAM), oak.yaml (camera), PX4 params
-sitl/        PX4 SITL rig: Docker, PX4 1.17 + Gazebo Harmonic + uXRCE, our course world
+sitl/        PX4 SITL rig: Docker, PX4 v1.16.2 (submodule) + Gazebo Harmonic + Humble, skybeta's nodes, our course world
 docker/      Jetson image (todo)
 docs/        SKYBETA.md (the real drone), DRONE_TESTING.md (every test/flight command on the drone), HANDHELD.md, SITL.md, FLYX_LOCAL.md (organizers' sim on pear-omen), POLICIES.md, HARDWARE.md
 ```
@@ -19,10 +19,10 @@ docs/        SKYBETA.md (the real drone), DRONE_TESTING.md (every test/flight co
 ## Run
 
 ```bash
-# SITL (a lab PC with Docker + NVIDIA runtime)
-sitl/run_rig.sh build && sitl/run_rig.sh up          # PX4 + Gazebo + bridges, ~90 s
-sitl/run_rig.sh policy                                # dry run: reports what the policy would command
-sitl/run_rig.sh policy -p arm:=true                   # fly (SPAWN_POSE=x,y,z,r,p,yaw_enu moves the start, BATTERY_SOC=0..1)
+# SITL: PX4 v1.16.2 + Gazebo + Humble with skybeta's flight_interface/bridge (the Jetson or a lab PC; docs/SITL.md)
+sitl/run_rig.sh build && sitl/run_rig.sh up           # PX4 + Gazebo + fake VIO/depth + skybeta's bridge
+sitl/run_rig.sh team                                  # our skybeta.launch.py (stereo_backend:=none)
+sitl/run_rig.sh pilot fly                             # dry run; --arm flies the competition flow (team OK first)
 
 # organizers' simulator: hosted workspace, or locally on pear-omen (docs/FLYX_LOCAL.md)
 ros2 launch launch/policynav.launch.py hardware:=flyx
