@@ -3,6 +3,9 @@
 This repo is the code that flies. Training lives in dronehacks-sim; read its AGENTS.md for the rules, the
 task, and how policies are trained. Keep this repo small and boring.
 
+Read [AGENT.md](AGENT.md) for the repository map, runtime contracts, and the classical iSAM2/MPPI
+stack on the `isam2` branch. This file remains the source of operating rules.
+
 Docs: docs/SITL.md (local PX4 rig), docs/FLYX_LOCAL.md (organizers' sim on pear-omen), docs/POLICIES.md
 (policy files + observation/action contract), docs/HARDWARE.md (kit, training-plant assumptions, open data).
 Update them when you change what they describe.
