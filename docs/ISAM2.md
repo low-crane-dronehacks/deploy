@@ -66,7 +66,12 @@ value, so the MPPI must bound rollouts itself. The net may not be seen by stereo
 
 ```bash
 sudo apt install ros-jazzy-gtsam                       # 4.2.0, pinned in config/versions.yaml
-colcon build --base-paths src                          # needs px4_msgs (release/1.17) in the workspace for the node
+# workspace with px4_msgs (release/1.17) next to this package, e.g. ~/isam2_ws/src/{px4_msgs, isam2_depth -> src}
+colcon build --packages-up-to isam2_depth --cmake-args -DCMAKE_BUILD_TYPE=Release   # builds px4_msgs first
+ls install/isam2_depth/lib/isam2_depth/isam2_depth_node   # without px4_msgs the build still succeeds, minus the node
+# Dev machines only, if needed: CMake not finding GTSAM -> -DGTSAM_DIR=<prefix>/lib/cmake/GTSAM (apt:
+# /opt/ros/jazzy/lib/cmake/GTSAM); an active conda env breaking ament (catkin_pkg) -> conda deactivate, or
+# -DPython3_EXECUTABLE=/usr/bin/python3
 ros2 run isam2_depth isam2_depth_node --ros-args -p depth_topic:=/camera/depth/image_raw \
     -p depth_info_topic:=/camera/depth/camera_info     # drone: /oak/stereo/image_raw (launch PROFILES)
 # core + test only, no ROS:
@@ -79,6 +84,39 @@ cmake -S src -B build && cmake --build build && ./build/test_depth_isam2
 
 The node sends nothing to PX4. It times PX4 samples by their arrival on the node clock (sim time in simulation)
 and interpolates them to the depth header stamp.
+
+## Spoof test: fake PX4 + depth rendered from a course scan
+
+No PX4, Gazebo or vehicle. `src/test/spoof_px4_depth.py` takes a scan of the course (.ply, aligned with
+`ego_planner/scripts/view_course_scan.py`), plans a route through its free space (launch mark, gates, pad), renders
+OAK-like 16UC1 depth from it (z-buffered splats, noise 0.003 z^2, invalid edges, dropouts) and publishes a drifting
+fake PX4 estimate on `/fmu/out/vehicle_local_position_v1` + `vehicle_attitude`, with `/clock`. It scores the node's
+`~/odometry` against the truth and its `~/obstacles` against the scan. It publishes telemetry only, never a command.
+
+```bash
+source ~/isam2_ws/install/setup.bash                      # conda deactivated
+export ROS_DOMAIN_ID=87                                   # your own, so the fake PX4 topics stay local
+ros2 launch src/test/spoof_isam2.launch.py ply:=$PWD/dronehacks-course-scan-2026-11-06.ply      # + RViz
+ros2 launch src/test/spoof_isam2.launch.py ply:=... rviz:=false spoof_args:='--no_drift --csv /tmp/run.csv'
+/usr/bin/python3 src/test/spoof_px4_depth.py scan.ply --plan_png /tmp/route.png    # route + depth frames, no ROS
+```
+
+RViz (fixed frame `map`, ENU above the NED world): scan (RGB), truth path green, spoofed PX4 path red, iSAM2 path
+blue, obstacle voxels orange, depth image. Drift knobs: `--yaw_drift_deg_s`, `--yaw_rw_deg`, `--scale`, `--pos_rw`.
+
+Results (2026-11-07, scan of 2026-11-06, 14.6 m route in 36 s, no revisits after the first 20 s):
+
+| fake PX4 estimate | PX4 error rms / final | iSAM2 error rms / final |
+|---|---|---|
+| perfect | 0 | 0.06 m / 0.09 m, 0.9 deg rms |
+| 0.5 deg/s yaw bias, 4% scale, 1 cm/sqrt(s) walk | 0.37 m / 0.68 m, 15.5 deg final | 0.14-0.16 m / 0.28-0.32 m, 6.3-6.6 deg final |
+
+Obstacle voxels: median 0.05-0.07 m from the scan surface. Keyframe update 12-20 ms (ICP 1-8 ms, iSAM2 < 0.5 ms).
+
+Reading: depth cuts the drift by about 2.5x but cannot remove it on a route that does not revisit places; only
+relative constraints exist (ICP between keyframes, revisit links). Absolute correction needs the prior-map factor
+(register depth against `config/arena_prior.bin`), which is not written. With perfect odometry the graph adds
+6 cm rms: ICP on splatted, noisy depth is slightly biased (the synthetic test's raycast depth gave 7 mm).
 
 ## Status (2026-11-07)
 
@@ -93,9 +131,8 @@ and interpolates them to the depth header stamp.
 Worst keyframe update: about 31 ms, of which ICP is about 18 ms, iSAM2 about 1.4 ms, and covariance plus grid about 7 ms.
 
 **Not done yet:**
-- Not run on SITL, FlyX or the Jetson. Expect several times slower on the Orin Nano; `cloud_stride`,
+- Not run on SITL, FlyX or the Jetson (only the spoof test above, on x86). Expect several times slower on the Orin Nano; `cloud_stride`,
   `extra_links` and `IcpParams::point_step` are the knobs.
-- The node was compile-checked against a stand-in px4_msgs with the same field names, not the real package.
 - No free-space carving: a voxel stays occupied once it has `grid_min_hits` points. Stereo speckle that repeats
   across keyframes, and anything that moves, persist.
 - Not in `launch/policynav.launch.py` yet (there is no MPPI to pair it with).

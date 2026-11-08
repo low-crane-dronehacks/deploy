@@ -1,0 +1,142 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Help Height: 0
+Visualization Manager:
+  Class: ""
+  Global Options:
+    Background Color: 40; 40; 44
+    Fixed Frame: map
+    Frame Rate: 30
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid (1 m, floor)
+      Enabled: true
+      Reference Frame: map
+      Cell Size: 1
+      Plane Cell Count: 8
+      Color: 120; 120; 120
+      Alpha: 0.4
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Scan (truth geometry)
+      Enabled: true
+      Topic:
+        Value: /spoof/scan
+        Depth: 1
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+        History Policy: Keep Last
+      Color Transformer: RGB8
+      Style: Points
+      Size (Pixels): 2
+      Alpha: 0.6
+      Decay Time: 0
+    - Class: rviz_default_plugins/PointCloud2
+      Name: iSAM2 obstacle voxels
+      Enabled: true
+      Topic:
+        Value: /isam2_depth/obstacles
+        Depth: 1
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+        History Policy: Keep Last
+      Color Transformer: FlatColor
+      Color: 255; 140; 0
+      Style: Boxes
+      Size (m): 0.05
+      Alpha: 0.5
+      Decay Time: 0
+    - Class: rviz_default_plugins/Path
+      Name: Truth path (green)
+      Enabled: true
+      Topic:
+        Value: /spoof/truth_path
+        Depth: 1
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+        History Policy: Keep Last
+      Color: 60; 220; 60
+      Line Style: Billboards
+      Line Width: 0.03
+      Alpha: 1
+    - Class: rviz_default_plugins/Path
+      Name: PX4 (spoofed, drifting) path (red)
+      Enabled: true
+      Topic:
+        Value: /spoof/px4_path
+        Depth: 1
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+        History Policy: Keep Last
+      Color: 230; 60; 60
+      Line Style: Billboards
+      Line Width: 0.03
+      Alpha: 1
+    - Class: rviz_default_plugins/Path
+      Name: iSAM2 path (blue)
+      Enabled: true
+      Topic:
+        Value: /spoof/isam2_path
+        Depth: 1
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+        History Policy: Keep Last
+      Color: 70; 140; 255
+      Line Style: Billboards
+      Line Width: 0.03
+      Alpha: 1
+    - Class: rviz_default_plugins/Odometry
+      Name: iSAM2 pose
+      Enabled: true
+      Topic:
+        Value: /isam2_depth/odometry
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+        History Policy: Keep Last
+      Keep: 1
+      Shape:
+        Value: Axes
+        Axes Length: 0.3
+        Axes Radius: 0.03
+      Covariance:
+        Value: false
+    - Class: rviz_default_plugins/TF
+      Name: TF (truth base_link)
+      Enabled: true
+      Show Names: false
+      Marker Scale: 0.5
+      Frames:
+        All Enabled: false
+        base_link:
+          Value: true
+    - Class: rviz_default_plugins/Image
+      Name: Depth
+      Enabled: true
+      Topic:
+        Value: /camera/depth/image_raw
+        Depth: 1
+        Durability Policy: Volatile
+        Reliability Policy: Best Effort
+        History Policy: Keep Last
+      Normalize Range: false
+      Min Value: 0
+      Max Value: 6000
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/Measure
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 11
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 0
+      Pitch: 1.1
+      Yaw: 3.9
+      Target Frame: map
+Window Geometry:
+  Width: 1500
+  Height: 950
