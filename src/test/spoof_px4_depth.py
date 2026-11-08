@@ -25,7 +25,9 @@ What it does:
   clock   /clock (sim time) paced at --rtf x real time; the node must run with use_sim_time:=true.
   score   compares /isam2_depth/odometry and the spoofed PX4 estimate with the truth at the same stamps (live
           every 5 s, summary at the end, --csv for the rows) and checks the node's obstacle voxels against the scan.
-  rviz    /spoof/scan (RGB cloud), /spoof/{truth,px4,isam2}_path, TF map(ENU) -> isam2_world_ned -> base_link.
+  rviz    /spoof/scan (RGB cloud), /spoof/{truth,px4,isam2}_path, TF map(ENU) -> isam2_world_ned -> base_link,
+          /spoof/cad_map: the designed course (the Gazebo world mesh sitl/world/course.obj, ENU = the map frame) as a
+          translucent triangle-list marker, to compare with the scan and iSAM2's map (--cad; --cad '' = off).
 """
 from __future__ import annotations
 
@@ -58,6 +60,22 @@ R_ENU_NED = np.array([[0, 1, 0], [1, 0, 0], [0, 0, -1]], dtype=float)
 
 
 # ----------------------------------------------------------------------------------------------- scene + route
+def load_obj_triangles(path: Path) -> np.ndarray:
+    """(T, 3, 3) float32 triangle corners of a Wavefront OBJ (v / f lines only; polygons fan-triangulated)."""
+    verts, faces = [], []
+    with open(path) as fh:
+        for line in fh:
+            if line.startswith('v '):
+                verts.append([float(x) for x in line.split()[1:4]])
+            elif line.startswith('f '):
+                idx = [int(tok.split('/')[0]) for tok in line.split()[1:]]
+                faces += [(idx[0], idx[k], idx[k + 1]) for k in range(1, len(idx) - 1)]
+    v = np.asarray(verts, np.float32)
+    f = np.asarray(faces, np.int64)
+    f = np.where(f > 0, f - 1, len(v) + f)               # OBJ is 1-based; negative = relative
+    return v[f]
+
+
 def load_scene(args):
     xyz, rgb = vcs.load_ply(args.ply)
     p = vcs.to_ned(xyz, args.up)
@@ -360,6 +378,9 @@ def run_ros(args, pts, rgb, tree, traj, est, renderer):
     from sensor_msgs.msg import CameraInfo, Image, PointCloud2, PointField
     from sensor_msgs_py import point_cloud2
     from std_msgs.msg import Header
+    from visualization_msgs.msg import Marker
+    from geometry_msgs.msg import Point
+    from std_msgs.msg import ColorRGBA
     from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
     t_arr, p, vel, R = traj
@@ -379,6 +400,7 @@ def run_ros(args, pts, rgb, tree, traj, est, renderer):
     pub_img = node.create_publisher(Image, '/camera/depth/image_raw', qos_profile_sensor_data)
     pub_info = node.create_publisher(CameraInfo, '/camera/depth/camera_info', qos_profile_sensor_data)
     pub_scan = node.create_publisher(PointCloud2, '/spoof/scan', latched)
+    pub_cad = node.create_publisher(Marker, '/spoof/cad_map', latched)
     pub_paths = {k: node.create_publisher(PathMsg, f'/spoof/{k}_path', latched) for k in ('truth', 'px4', 'isam2')}
     static_tf, tf = StaticTransformBroadcaster(node), TransformBroadcaster(node)
 
@@ -417,6 +439,15 @@ def run_ros(args, pts, rgb, tree, traj, est, renderer):
               for k, n in enumerate(('x', 'y', 'z', 'rgb'))]
     cloud = np.concatenate([pts[idx].astype(np.float32), packed[:, None]], 1)
     pub_scan.publish(point_cloud2.create_cloud(Header(frame_id=world), fields, cloud.tolist()))
+    if args.cad:
+        tris = load_obj_triangles(args.cad)              # ENU metres = the RViz 'map' frame
+        mk = Marker(header=Header(frame_id='map'), ns='cad', id=0, type=Marker.TRIANGLE_LIST, action=Marker.ADD)
+        mk.pose.orientation.w = 1.0
+        mk.scale.x = mk.scale.y = mk.scale.z = 1.0
+        mk.color = ColorRGBA(r=0.75, g=0.75, b=0.8, a=0.35)
+        mk.points = [Point(x=float(a), y=float(b), z=float(c)) for a, b, c in tris.reshape(-1, 3)]
+        pub_cad.publish(mk)
+        print(f'CAD map: {len(tris)} triangles from {args.cad} on /spoof/cad_map')
     truth_path = PathMsg(header=Header(frame_id=world))
     truth_path.poses = [pose(t_arr[i], p[i], R[i]) for i in range(0, len(t_arr), 10)]
     pub_paths['truth'].publish(truth_path)
@@ -604,6 +635,8 @@ def main(argv=None):
     g.add_argument('--px4_hz', type=float, default=50.0)
     g.add_argument('--seed', type=int, default=0)
     g.add_argument('--csv', type=Path, help='write truth / PX4 / iSAM2 rows here at the end')
+    g.add_argument('--cad', type=lambda s: Path(s) if s else None, default=DEPLOY_ROOT / 'sitl' / 'world' / 'course.obj',
+                   help="designed-course mesh (ENU OBJ) shown in RViz on /spoof/cad_map; '' = off")
     g.add_argument('--plan_png', type=Path, help='no ROS: save the route + sample depth frames and exit')
     args = ap.parse_args(argv)
     if args.no_drift:

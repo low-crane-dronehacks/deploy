@@ -31,6 +31,15 @@ Visualization Manager:
       Size (Pixels): 2
       Alpha: 0.6
       Decay Time: 0
+    - Class: rviz_default_plugins/Marker
+      Name: CAD map (designed course, sitl/world/course.obj)
+      Enabled: true
+      Topic:
+        Value: /spoof/cad_map
+        Depth: 1
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+        History Policy: Keep Last
     - Class: rviz_default_plugins/PointCloud2
       Name: iSAM2 obstacle voxels
       Enabled: true
