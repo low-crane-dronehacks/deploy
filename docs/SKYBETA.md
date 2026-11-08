@@ -92,7 +92,7 @@ take every 30 Hz cuVSLAM transform on `/tf` (reliable, keep_last 100) through th
   `flight_interface` (~21 %, Python) all migrate over cores 0-5; ~1.9 of 6 cores busy, evenly spread. There is
   no "VIO core" to avoid, hence `nice` by default and `cpus` as an option.
 - **SHM is the data path.** Every participant has a `/dev/shm/fastrtps_<guid>` segment of 549408 B (the 512 KiB
-  default) and `fastrtps_port<N>` queues on the user-unicast ports (domain 17: 11661, 11663, ...). Loopback UDP
+  default) and `fastrtps_port<N>` queues on the domain's user-unicast ports. Loopback UDP
   runs at ~750 datagrams/s, far below what 30 Hz images would need (~1900/s per reader); that is discovery and
   the uXRCE agent's PX4 topics (the agent has its own UDP-only participant).
 - **Fragmentation:** Fast DDS 2.6 cuts every sample to the smallest transport limit (UDP, ~64 KB), SHM
@@ -172,7 +172,8 @@ Dry run is the default (`fly:=false`: wait for valid PX4 feedback, print the pla
 `px4_feedback_topic` defaults to `/fmu/out/vehicle_local_position` as resolved on skybeta-17; override it
 for a version-suffixed topic when necessary. Both Skybeta launches default `target_system` to **25**,
 the flight controller's `MAV_SYS_ID` / `vehicle_status.system_id`; override on other vehicles.
-The hostname skybeta-17 and ROS domain 17 are separate identifiers. Only the organizer interface sends PX4 commands. Its own
+The hostname remains skybeta-17; ROS domain **25** and PX4 system ID **25** are separate settings.
+Only the organizer interface sends PX4 commands. Its own
 `odometry_topic` and the organizer EKF2 fusion configuration remain unchanged; the mission does not disable
 vision fusion in PX4. See [DRONE_TESTING.md](DRONE_TESTING.md) for readiness and build steps.
 

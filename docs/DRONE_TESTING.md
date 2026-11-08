@@ -43,14 +43,14 @@ ros2 topic echo /visual_slam/status --once     # vo_state 1 = tracking, 2 = lost
 The common arguments for running our nodes beside the stack, in their own container:
 
 ```bash
-DARGS="--rm --runtime nvidia --network host --ipc host -e ROS_DOMAIN_ID=17 -e RMW_IMPLEMENTATION=rmw_fastrtps_cpp \
+DARGS="--rm --runtime nvidia --network host --ipc host -e ROS_DOMAIN_ID=25 -e RMW_IMPLEMENTATION=rmw_fastrtps_cpp \
   -v $HOME/skybeta/host/dds/fastdds_localhost.xml:/etc/skybeta/fastdds.xml:ro \
   -e FASTRTPS_DEFAULT_PROFILES_FILE=/etc/skybeta/fastdds.xml -e FASTDDS_DEFAULT_PROFILES_FILE=/etc/skybeta/fastdds.xml \
   -v $HOME/team_ws:/root/team_ws"
 SRC="source /opt/ros/humble/setup.bash; source /root/skybeta_ws/install/setup.bash; source /root/team_ws/install/setup.bash"
 ```
 
-`ROS_DOMAIN_ID` must be this drone's (see `/etc/skybeta/drone.env`; 17 on skybeta-17).
+`ROS_DOMAIN_ID` must be this drone's (see `/etc/skybeta/drone.env`; **25** on skybeta-17).
 
 ## 3. Handheld bench (camera + depth + policy; never commands PX4)
 
@@ -107,8 +107,8 @@ for the organizer's pre-flight checks. Its default topic is `/fmu/out/vehicle_lo
 skybeta-17. If the installed message generation uses a suffix, set
 `px4_feedback_topic:=/fmu/out/vehicle_local_position_v1` after checking the live topic type.
 Both Skybeta launches default `target_system` to **25**, matching skybeta-17's flight controller
-(`MAV_SYS_ID` / `vehicle_status.system_id`); override it on other vehicles. The hostname/drone number
-and `ROS_DOMAIN_ID` remain **17**. Neither is the PX4 system ID. `component_id: 1` is also a separate field.
+(`MAV_SYS_ID` / `vehicle_status.system_id`); override it on other vehicles. `ROS_DOMAIN_ID` is also **25**,
+but is a separate setting. The hostname/drone number remains **17**. `component_id: 1` is another separate field.
 Recheck after a firmware/configuration change with
 `ros2 topic echo /fmu/out/vehicle_status --once --qos-reliability best_effort` on PX4 1.16
 (use the version-suffixed topic only if that is what the live stack publishes).
@@ -184,7 +184,7 @@ policy; matching training's lost-range value and camera-rate frame stacking rema
 drone's local DDS domain, so `drone.env` does not change and the stack does not restart.
 
 ```bash
-docker run --rm --network host --ipc host -e ROS_DOMAIN_ID=17 -e RMW_IMPLEMENTATION=rmw_fastrtps_cpp \
+docker run --rm --network host --ipc host -e ROS_DOMAIN_ID=25 -e RMW_IMPLEMENTATION=rmw_fastrtps_cpp \
   -v ~/skybeta/host/dds/fastdds_localhost.xml:/etc/skybeta/fastdds.xml:ro \
   -e FASTRTPS_DEFAULT_PROFILES_FILE=/etc/skybeta/fastdds.xml -e FASTDDS_DEFAULT_PROFILES_FILE=/etc/skybeta/fastdds.xml \
   skybeta:0.3.2 bash -c "source /opt/ros/humble/setup.bash; source /root/skybeta_ws/install/setup.bash; \
