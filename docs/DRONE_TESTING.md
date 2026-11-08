@@ -191,9 +191,9 @@ For a props-off stereo check, compare the normal handheld launch with `swap_eyes
 images are mislabelled relative to correctly labelled calibration. This swaps images only; camera-info and TF stay fixed.
 Verify a known-distance object on each side of the view; an invalid band on the right alone is not proof
 of swapped eyes. Nonpositive/nonfinite baselines now prevent depth output instead of merely logging a
-warning. The policy default is `c5_s164_1575.npz`, with 16-column edge filling enabled in its metadata.
+warning. The policy default is `holes_v5h3_s196_3255.npz`, with 16-column edge filling enabled in its metadata.
 V5 is included and can be inspected without commands using
-`ros2 launch policynav skybeta.launch.py mode:=handheld policy:=policies/c5_s164_1575.npz`.
+`ros2 launch policynav skybeta.launch.py mode:=handheld policy:=policies/holes_v5h3_s196_3255.npz`.
 Older policies retain their no-fill preprocessing. These bench checks do not validate the reported simulation success rates.
 
 Check the selected policy's exported `v_obs_scale`: this policy family uses `[5, 3, 2]` despite action
