@@ -24,7 +24,7 @@ struct RRTStarConfig {
   double robot_radius_m{0.21};           // collision inflation radius (m)
   double comfort_clearance_m{0.46};      // medial-axis comfort clearance (m)
   double comfort_weight{4.2};            // clearance penalty weight in edge cost
-  double cruise_speed_m_s{2.60};         // nominal speed along smoothed B-spline path
+  double cruise_speed_m_s{1.50};         // nominal speed along smoothed B-spline path (flight_interface clamp)
   double bspline_dt_s{0.05};             // dense path discretization interval (20 Hz)
   Eigen::Vector3d bounds_min_ned{-2.86, -2.86, -1.60};
   Eigen::Vector3d bounds_max_ned{2.86, 2.86, -0.22};

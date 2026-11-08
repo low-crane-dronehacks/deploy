@@ -66,7 +66,7 @@ class RRTStarPlannerNode : public rclcpp::Node {
     }
 
     RRTStarConfig rcfg{};
-    rcfg.cruise_speed_m_s = declare_parameter<double>("cruise_speed_m_s", 2.60);
+    rcfg.cruise_speed_m_s = declare_parameter<double>("cruise_speed_m_s", 1.50);
     rcfg.max_iterations = static_cast<int>(declare_parameter<int64_t>("rrt_max_iterations", 1200));
     rrt_planner_ = std::make_unique<RRTStarPlanner>(rcfg, gt_map_);
 

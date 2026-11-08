@@ -69,7 +69,7 @@ MazePipelineHandle* maze_pipeline_create(const MazePipelineCConfig* cfg) {
   maze_planning::MPPIConfig mcfg{};
   if (cfg && cfg->mppi_samples > 16) mcfg.num_samples = cfg->mppi_samples;
   if (cfg && cfg->mppi_horizon_steps > 4) mcfg.horizon_steps = cfg->mppi_horizon_steps;
-  maze_planning::MultirotorPlantParams plant{};
+  maze_planning::QuadPlantParams plant{};
   h->mppi = std::make_unique<maze_planning::MPPIController>(mcfg, plant, h->costmap);
 
   h->mux = std::make_unique<maze_planning::ControlMux>();

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Closed-loop evaluation of C++ Informed RRT* + PathTransformer + STVL Costmap + 2048-rollout MPPI
+"""Closed-loop evaluation of C++ Informed RRT* + PathTransformer + STVL Costmap + MPPI (1024 rollouts by default, quad.py plant)
 in dronehacks-sim (CourseEnv), including Milestone 3 unmodeled vertical pole evasion tests.
 """
 from __future__ import annotations
@@ -37,10 +37,10 @@ def rpy_to_quat_wxyz(roll: float, pitch: float, yaw: float) -> tuple[float, floa
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Evaluate C++ RRT* + 2048-rollout MPPI in dronehacks-sim")
+    ap = argparse.ArgumentParser(description="Evaluate C++ RRT* + MPPI (1024 rollouts by default, quad.py plant) in dronehacks-sim")
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--steps", type=int, default=150)
-    ap.add_argument("--mppi-samples", type=int, default=2048)
+    ap.add_argument("--mppi-samples", type=int, default=1024)
     ap.add_argument("--inject-pillar", action="store_true", help="Place unmodeled vertical pole in launch chute")
     args = ap.parse_args()
 
@@ -55,7 +55,7 @@ def main() -> None:
     env.set_eval_queue(torch.tensor([[int(launch_cells[0])]], device=env.device))
     env.get_observations()
 
-    pipe = MazePlanningPipeline(mppi_samples=args.mppi_samples, cruise_speed_m_s=2.65)
+    pipe = MazePlanningPipeline(mppi_samples=args.mppi_samples, cruise_speed_m_s=1.50)
     pos0 = env.plant.pos_ned[0].detach().cpu().numpy()
     pipe.reset((float(pos0[0]), float(pos0[1]), -0.78))
     if args.inject_pillar:

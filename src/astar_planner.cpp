@@ -364,6 +364,7 @@ AStarPlanResult AStarPlanner::plan(const Eigen::Vector3d& start_map, const std::
   std::vector<double> v(n);
   for (std::size_t i = 0; i < n; ++i) {
     v[i] = std::min(cfg_.cruise_speed_m_s, std::sqrt(cfg_.lat_acc_m_s2 / std::max(kappa_s[i], 1e-6)));
+    if (cfg_.yaw_rate_max_rad_s > 0.0) v[i] = std::min(v[i], cfg_.yaw_rate_max_rad_s / std::max(kappa_s[i], 1e-6));
   }
   if (cfg_.gate_apex_speed_m_s > 0.0) {
     for (std::size_t gi = 0; gi < goals.size(); ++gi) {

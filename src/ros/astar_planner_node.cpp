@@ -48,6 +48,7 @@ class AStarPlannerNode : public rclcpp::Node {
     cfg.clearance_m = declare_parameter<double>("clearance_m", cfg.clearance_m);
     cfg.cruise_speed_m_s = declare_parameter<double>("cruise_speed_m_s", cfg.cruise_speed_m_s);
     cfg.lat_acc_m_s2 = declare_parameter<double>("lat_acc_m_s2", cfg.lat_acc_m_s2);
+    cfg.yaw_rate_max_rad_s = declare_parameter<double>("yaw_rate_max_rad_s", cfg.yaw_rate_max_rad_s);
     cfg.acc_m_s2 = declare_parameter<double>("acc_m_s2", cfg.acc_m_s2);
     cfg.cp_margin_m = declare_parameter<double>("cp_margin_m", cfg.cp_margin_m);
 

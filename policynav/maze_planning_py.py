@@ -1,4 +1,4 @@
-"""Python ctypes bindings for libmaze_planning_core.so (GroundTruthMap, RRT*, PathTransformer, STVL Costmap, 2048-rollout MPPI)."""
+"""Python ctypes bindings for libmaze_planning_core.so (GroundTruthMap, RRT*, PathTransformer, STVL Costmap, MPPI (1024 rollouts by default, quad.py plant))."""
 from __future__ import annotations
 
 import ctypes
@@ -116,16 +116,16 @@ def _load_cdll() -> ctypes.CDLL:
 
 
 class MazePlanningPipeline:
-    """Python interface to the C++17 GroundTruthMap + Informed RRT* + PathTransformer + STVL Costmap + 2048-rollout MPPI."""
+    """Python interface to the C++17 GroundTruthMap + Informed RRT* + PathTransformer + STVL Costmap + MPPI (1024 rollouts by default, quad.py plant)."""
 
     def __init__(
         self,
         groundtruth_map_path: str | os.PathLike | None = None,
         prefer_window: bool = True,
         include_return_leg: bool = False,
-        mppi_samples: int = 2048,
+        mppi_samples: int = 1024,
         mppi_horizon_steps: int = 16,
-        cruise_speed_m_s: float = 2.65,
+        cruise_speed_m_s: float = 1.50,
     ):
         self._lib = _load_cdll()
         gt_bytes = str(groundtruth_map_path or DEFAULT_GT_MAP).encode("utf-8")

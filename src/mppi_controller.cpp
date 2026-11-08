@@ -11,7 +11,7 @@
 namespace maze_planning {
 
 MPPIController::MPPIController(const MPPIConfig& cfg,
-                               const MultirotorPlantParams& plant,
+                               const QuadPlantParams& plant,
                                std::shared_ptr<const VoxelCostmap> costmap)
     : cfg_(cfg), plant_(plant), costmap_(std::move(costmap)) {
   reset();
@@ -24,7 +24,9 @@ void MPPIController::reset() {
   weights_.assign(static_cast<std::size_t>(cfg_.num_samples), 0.0);
   horizon_refs_.resize(static_cast<std::size_t>(cfg_.horizon_steps));
   horizon_safe_.assign(static_cast<std::size_t>(cfg_.horizon_steps), cfg_.safe_distance_m);
+  path_frames_.assign(static_cast<std::size_t>(cfg_.horizon_steps), Eigen::Matrix3d::Identity());
   optimal_rollout_pos_.clear();
+  optimal_rollout_yaw_.clear();
   candidates_ = MPPICandidateSet{};
   consecutive_stall_ticks_ = 0;
   last_solve_ms_ = 0.0;
@@ -53,48 +55,17 @@ void MPPIController::setLocalDistanceGrid(std::shared_ptr<const isam2_depth::Dis
 
 MPPIControl MPPIController::clampControl(const MPPIControl& u) const {
   MPPIControl c = u;
-  c.vel_cmd_yaw_aligned.x() =
-      std::clamp(c.vel_cmd_yaw_aligned.x(), -plant_.v_max_xy, plant_.v_max_xy);
-  c.vel_cmd_yaw_aligned.y() =
-      std::clamp(c.vel_cmd_yaw_aligned.y(), -plant_.v_max_xy, plant_.v_max_xy);
-  const double v_xy = std::hypot(c.vel_cmd_yaw_aligned.x(), c.vel_cmd_yaw_aligned.y());
-  if (v_xy > plant_.v_max_xy) {
-    const double s = plant_.v_max_xy / v_xy;
-    c.vel_cmd_yaw_aligned.x() *= s;
-    c.vel_cmd_yaw_aligned.y() *= s;
+  const double v_xy = std::hypot(c.vel_cmd_ned.x(), c.vel_cmd_ned.y());
+  if (v_xy > cfg_.v_max_xy) {
+    const double s = cfg_.v_max_xy / v_xy;
+    c.vel_cmd_ned.x() *= s;
+    c.vel_cmd_ned.y() *= s;
   }
-  c.vel_cmd_yaw_aligned.z() =
-      std::clamp(c.vel_cmd_yaw_aligned.z(), -plant_.v_max_z, plant_.v_max_z);
-  c.yaw_rate_cmd_rad_s =
-      std::clamp(c.yaw_rate_cmd_rad_s, -plant_.yaw_rate_max, plant_.yaw_rate_max);
+  c.vel_cmd_ned.z() = std::clamp(c.vel_cmd_ned.z(), -cfg_.v_max_z, cfg_.v_max_z);
+  const double v = c.vel_cmd_ned.norm();
+  if (v > cfg_.v_max_norm) c.vel_cmd_ned *= cfg_.v_max_norm / v;
+  c.yaw_rate_cmd_rad_s = std::clamp(c.yaw_rate_cmd_rad_s, -cfg_.yaw_rate_max, cfg_.yaw_rate_max);
   return c;
-}
-
-MultirotorRolloutState MPPIController::stepPlant(const MultirotorRolloutState& st,
-                                                 const MPPIControl& u,
-                                                 double dt) const {
-  MultirotorRolloutState next = st;
-  const double cy = std::cos(st.yaw_rad);
-  const double sy = std::sin(st.yaw_rad);
-
-  // Rotate yaw-aligned velocity command [v_fwd, v_right, v_down] into odom/NED frame
-  const Eigen::Vector3d v_des_odom(
-      cy * u.vel_cmd_yaw_aligned.x() - sy * u.vel_cmd_yaw_aligned.y(),
-      sy * u.vel_cmd_yaw_aligned.x() + cy * u.vel_cmd_yaw_aligned.y(),
-      u.vel_cmd_yaw_aligned.z());
-
-  // Lee geometric velocity tracking + aerodynamic drag + first-order motor lag
-  const Eigen::Vector3d a_des(
-      plant_.k_vel_xy * (v_des_odom.x() - st.vel_odom.x()) - plant_.drag_coeff_xy * st.vel_odom.x(),
-      plant_.k_vel_xy * (v_des_odom.y() - st.vel_odom.y()) - plant_.drag_coeff_xy * st.vel_odom.y(),
-      plant_.k_vel_z * (v_des_odom.z() - st.vel_odom.z()));
-
-  const double alpha_lag = dt / (plant_.motor_tau_s + dt);
-  next.acc_odom = (1.0 - alpha_lag) * st.acc_odom + alpha_lag * a_des;
-  next.vel_odom = st.vel_odom + next.acc_odom * dt;
-  next.pos_odom = st.pos_odom + 0.5 * (st.vel_odom + next.vel_odom) * dt;
-  next.yaw_rad = wrapPi(st.yaw_rad + u.yaw_rate_cmd_rad_s * dt);
-  return next;
 }
 
 double MPPIController::queryClearanceOdom(const Eigen::Vector3d& p_odom) const {
@@ -111,14 +82,11 @@ void MPPIController::smoothControlSequence() {
   if (T < 3) return;
   std::vector<MPPIControl> filtered = u_mean_;
   for (int t = 1; t < T - 1; ++t) {
-    filtered[t].vel_cmd_yaw_aligned =
-        0.22 * u_mean_[t - 1].vel_cmd_yaw_aligned +
-        0.56 * u_mean_[t].vel_cmd_yaw_aligned +
-        0.22 * u_mean_[t + 1].vel_cmd_yaw_aligned;
-    filtered[t].yaw_rate_cmd_rad_s =
-        0.22 * u_mean_[t - 1].yaw_rate_cmd_rad_s +
-        0.56 * u_mean_[t].yaw_rate_cmd_rad_s +
-        0.22 * u_mean_[t + 1].yaw_rate_cmd_rad_s;
+    filtered[t].vel_cmd_ned =
+        0.22 * u_mean_[t - 1].vel_cmd_ned + 0.56 * u_mean_[t].vel_cmd_ned + 0.22 * u_mean_[t + 1].vel_cmd_ned;
+    filtered[t].yaw_rate_cmd_rad_s = 0.22 * u_mean_[t - 1].yaw_rate_cmd_rad_s +
+                                     0.56 * u_mean_[t].yaw_rate_cmd_rad_s +
+                                     0.22 * u_mean_[t + 1].yaw_rate_cmd_rad_s;
     filtered[t] = clampControl(filtered[t]);
   }
   u_mean_ = std::move(filtered);
@@ -188,6 +156,7 @@ TrajectorySetpointCmd MPPIController::computeCommand(
     weights_.resize(static_cast<std::size_t>(K));
     horizon_refs_.resize(static_cast<std::size_t>(T));
   }
+  path_frames_.resize(static_cast<std::size_t>(T));
 
   // 1. Pre-sample O(1) horizon reference targets along local_ref_odom
   const int start_idx = local_ref_odom.findClosestIndex(state_odom.pos_odom, 0);
@@ -204,48 +173,57 @@ TrajectorySetpointCmd MPPIController::computeCommand(
     }
   }
 
-  // 2. Shift warm-start mean sequence by 1 step and blend with nominal reference velocity prior
+  const double cur_yaw = state_odom.yaw();
+  const double cy0 = std::cos(cur_yaw);
+  const double sy0 = std::sin(cur_yaw);
+
+  // Path frame per horizon step: along = horizontal reference tangent (from its velocity, else its yaw, else
+  // the current heading), cross = along rotated +90 deg about NED down (the right-hand side), down = +z.
+  for (int t = 0; t < T; ++t) {
+    const PathPoint& ref = horizon_refs_[t];
+    Eigen::Vector2d a(ref.vel.x(), ref.vel.y());
+    if (a.norm() < 0.05) a = Eigen::Vector2d(std::cos(ref.yaw_rad), std::sin(ref.yaw_rad));
+    if (!a.allFinite() || a.norm() < 1e-6) a = Eigen::Vector2d(cy0, sy0);
+    a.normalize();
+    Eigen::Matrix3d F;
+    F.col(0) = Eigen::Vector3d(a.x(), a.y(), 0.0);
+    F.col(1) = Eigen::Vector3d(-a.y(), a.x(), 0.0);
+    F.col(2) = Eigen::Vector3d(0.0, 0.0, 1.0);
+    path_frames_[t] = F;
+  }
+
+  // 2. Shift the warm-start mean sequence by 1 step (world frame: still valid after the vehicle yawed) and
+  // blend it with the nominal reference-tracking prior. The yaw prior steers toward the reference heading from
+  // the heading the mean sequence itself predicts at that step, not from the current heading at every step.
   for (int t = 0; t < T - 1; ++t) {
     u_mean_[t] = u_mean_[t + 1];
   }
   u_mean_[T - 1] = u_mean_[std::max(0, T - 2)];
 
-  const double cur_yaw = state_odom.yaw();
-  const double cy0 = std::cos(cur_yaw);
-  const double sy0 = std::sin(cur_yaw);
   const double alpha = std::clamp(cfg_.alpha_prior, 0.0, 1.0);
-
+  double yaw_pred = cur_yaw;
   for (int t = 0; t < T; ++t) {
     const PathPoint& ref = horizon_refs_[t];
     const Eigen::Vector3d pos_err =
         ref.pos - (state_odom.pos_odom + state_odom.vel_odom * ((t + 1) * cfg_.dt_s));
-    const Eigen::Vector3d v_prior_odom(
-        ref.vel.x() + 1.45 * pos_err.x(),
-        ref.vel.y() + 1.45 * pos_err.y(),
-        ref.vel.z() + 1.80 * pos_err.z());
-
     MPPIControl u_nom{};
-    u_nom.vel_cmd_yaw_aligned = Eigen::Vector3d(
-        cy0 * v_prior_odom.x() + sy0 * v_prior_odom.y(),
-        -sy0 * v_prior_odom.x() + cy0 * v_prior_odom.y(),
-        v_prior_odom.z());
-    u_nom.yaw_rate_cmd_rad_s =
-        std::clamp(1.8 * wrapPi(ref.yaw_rad - cur_yaw), -plant_.yaw_rate_max, plant_.yaw_rate_max);
+    u_nom.vel_cmd_ned = Eigen::Vector3d(ref.vel.x() + 1.45 * pos_err.x(),
+                                        ref.vel.y() + 1.45 * pos_err.y(),
+                                        ref.vel.z() + 1.80 * pos_err.z());
+    u_nom.yaw_rate_cmd_rad_s = 1.8 * wrapPi(ref.yaw_rad - yaw_pred);
     u_nom = clampControl(u_nom);
 
-    u_mean_[t].vel_cmd_yaw_aligned =
-        (1.0 - alpha) * u_mean_[t].vel_cmd_yaw_aligned + alpha * u_nom.vel_cmd_yaw_aligned;
+    u_mean_[t].vel_cmd_ned = (1.0 - alpha) * u_mean_[t].vel_cmd_ned + alpha * u_nom.vel_cmd_ned;
     u_mean_[t].yaw_rate_cmd_rad_s =
         (1.0 - alpha) * u_mean_[t].yaw_rate_cmd_rad_s + alpha * u_nom.yaw_rate_cmd_rad_s;
     u_mean_[t] = clampControl(u_mean_[t]);
+    yaw_pred = wrapPi(yaw_pred + u_mean_[t].yaw_rate_cmd_rad_s * cfg_.dt_s);
   }
 
-  // 3. Sample K = 2048 temporally correlated noise sequences & evaluate 6-DoF rollouts in parallel
-  MultirotorRolloutState x0{};
-  x0.pos_odom = state_odom.pos_odom;
-  x0.vel_odom = state_odom.vel_odom;
-  x0.acc_odom = Eigen::Vector3d::Zero();
-  x0.yaw_rad = cur_yaw;
+  // 3. Sample K temporally correlated noise sequences (path frame) & evaluate rollouts through the quad.py
+  // plant in parallel
+  const QuadState x0 = plant_.fromNed(state_odom.pos_odom, state_odom.vel_odom, state_odom.q_odom_base,
+                                      state_odom.omega_body);
 
   // Candidate rollouts kept for visualization: every `cand_stride`-th sample, so k = 0 (the noise-free
   // mean sequence) is always one of them.
@@ -258,6 +236,7 @@ TrajectorySetpointCmd MPPIController::computeCommand(
 
   const double beta = std::clamp(cfg_.noise_corr_beta, 0.0, 0.95);
   const double inv_sqrt = std::sqrt(std::max(1e-4, 1.0 - beta * beta));
+  const double cos_fov = std::cos(std::clamp(cfg_.fov_half_angle_rad, 0.0, M_PI));
 
   #pragma omp parallel
   {
@@ -272,7 +251,7 @@ TrajectorySetpointCmd MPPIController::computeCommand(
 
     #pragma omp for schedule(static)
     for (int k = 0; k < K; ++k) {
-      MultirotorRolloutState st = x0;
+      QuadState st = x0;
       MPPIControl prev_u = u_mean_[0];
       const int cand_slot = (cand_stride > 0 && k % cand_stride == 0 && k / cand_stride < n_cand)
                                 ? k / cand_stride
@@ -280,61 +259,58 @@ TrajectorySetpointCmd MPPIController::computeCommand(
       Eigen::Vector3d* cand_pos = (cand_slot >= 0)
           ? &candidates_.positions[static_cast<std::size_t>(cand_slot * (T + 1))]
           : nullptr;
-      if (cand_pos) cand_pos[0] = x0.pos_odom;
-      double vx_n = 0.0, vy_n = 0.0, vz_n = 0.0, yr_n = 0.0;
+      if (cand_pos) cand_pos[0] = state_odom.pos_odom;
+      double na = 0.0, nc = 0.0, nd = 0.0, yr_n = 0.0;
       double total_cost = 0.0;
 
-      // Bimodal lateral bias on 35% of samples so MPPI naturally splits left/right around
+      // Bimodal cross-track bias on 35% of samples so MPPI naturally splits left/right of the PATH around
       // dead-center corridor pillars (Section 6 FMEA: Pillar Dead-Center)
       double lateral_split_bias = 0.0;
       if (k >= (13 * K) / 20) {
-        lateral_split_bias = ((k & 1) == 0) ? 0.95 : -0.95;
+        lateral_split_bias = ((k & 1) == 0) ? cfg_.lateral_split_m_s : -cfg_.lateral_split_m_s;
       }
 
       for (int t = 0; t < T; ++t) {
         if (k == 0) {
-          vx_n = 0.0; vy_n = 0.0; vz_n = 0.0; yr_n = 0.0;
+          na = 0.0; nc = 0.0; nd = 0.0; yr_n = 0.0;
         } else {
-          vx_n = beta * vx_n + inv_sqrt * n01(local_rng) * cfg_.sigma_vel.x();
-          vy_n = beta * vy_n + inv_sqrt * n01(local_rng) * cfg_.sigma_vel.y();
-          vz_n = beta * vz_n + inv_sqrt * n01(local_rng) * cfg_.sigma_vel.z();
+          na = beta * na + inv_sqrt * n01(local_rng) * cfg_.sigma_vel.x();
+          nc = beta * nc + inv_sqrt * n01(local_rng) * cfg_.sigma_vel.y();
+          nd = beta * nd + inv_sqrt * n01(local_rng) * cfg_.sigma_vel.z();
           yr_n = beta * yr_n + inv_sqrt * n01(local_rng) * cfg_.sigma_yaw_rate;
         }
 
-        MPPIControl noise_t{};
-        noise_t.vel_cmd_yaw_aligned = Eigen::Vector3d(vx_n, vy_n + lateral_split_bias, vz_n);
-        noise_t.yaw_rate_cmd_rad_s = yr_n;
-
         MPPIControl u_t{};
-        u_t.vel_cmd_yaw_aligned =
-            u_mean_[t].vel_cmd_yaw_aligned + noise_t.vel_cmd_yaw_aligned;
-        u_t.yaw_rate_cmd_rad_s =
-            u_mean_[t].yaw_rate_cmd_rad_s + noise_t.yaw_rate_cmd_rad_s;
+        u_t.vel_cmd_ned = u_mean_[t].vel_cmd_ned +
+                          path_frames_[t] * Eigen::Vector3d(na, nc + lateral_split_bias, nd);
+        u_t.yaw_rate_cmd_rad_s = u_mean_[t].yaw_rate_cmd_rad_s + yr_n;
         u_t = clampControl(u_t);
 
         // Store effective realized perturbation in time-major order (t * K + k) for cache-coherent reduction
-        noise_t.vel_cmd_yaw_aligned =
-            u_t.vel_cmd_yaw_aligned - u_mean_[t].vel_cmd_yaw_aligned;
-        noise_t.yaw_rate_cmd_rad_s =
-            u_t.yaw_rate_cmd_rad_s - u_mean_[t].yaw_rate_cmd_rad_s;
+        MPPIControl noise_t{};
+        noise_t.vel_cmd_ned = u_t.vel_cmd_ned - u_mean_[t].vel_cmd_ned;
+        noise_t.yaw_rate_cmd_rad_s = u_t.yaw_rate_cmd_rad_s - u_mean_[t].yaw_rate_cmd_rad_s;
         flat_noise_[static_cast<std::size_t>(t * K + k)] = noise_t;
 
-        st = stepPlant(st, u_t, cfg_.dt_s);
-        if (cand_pos) cand_pos[t + 1] = st.pos_odom;
+        plant_.stepWorld(st, u_t.vel_cmd_ned, u_t.yaw_rate_cmd_rad_s, cfg_.dt_s);
+        const Eigen::Vector3d pos = st.posNed();
+        const Eigen::Vector3d vel = st.velNed();
+        const double yaw = st.yawNed();
+        if (cand_pos) cand_pos[t + 1] = pos;
         const PathPoint& ref = horizon_refs_[t];
 
         // Critic 1: PathFollowCritic (3D position tracking error)
-        const Eigen::Vector3d pos_err = st.pos_odom - ref.pos;
+        const Eigen::Vector3d pos_err = pos - ref.pos;
         const double path_follow_cost =
             pos_err.x() * pos_err.x() + pos_err.y() * pos_err.y() + 1.8 * pos_err.z() * pos_err.z();
         total_cost += cfg_.w_path_follow * path_follow_cost * cfg_.dt_s;
 
         // Critic 2: PathAlignCritic (velocity vector alignment)
-        const Eigen::Vector3d vel_err = st.vel_odom - ref.vel;
+        const Eigen::Vector3d vel_err = vel - ref.vel;
         total_cost += cfg_.w_path_align * vel_err.squaredNorm() * cfg_.dt_s;
 
         // Critic 3: ObstaclesCritic (GroundTruthMap static walls + STVL unmodeled beams + iSAM2 grid)
-        const double d_obs = queryClearanceOdom(st.pos_odom);
+        const double d_obs = queryClearanceOdom(pos);
         if (d_obs <= cfg_.lethal_distance_m) {
           total_cost += cfg_.w_obstacles * (22.0 + 160.0 * (cfg_.lethal_distance_m - d_obs));
         } else if (d_obs < horizon_safe_[t]) {
@@ -344,7 +320,7 @@ TrajectorySetpointCmd MPPIController::computeCommand(
         }
 
         // Altitude & outer-net geofence barrier
-        const double alt = -st.pos_odom.z();
+        const double alt = -pos.z();
         if (alt < 0.20) {
           const double d_alt = 0.20 - alt;
           total_cost += 220.0 * d_alt * d_alt;
@@ -352,25 +328,35 @@ TrajectorySetpointCmd MPPIController::computeCommand(
           const double d_alt = alt - 1.62;
           total_cost += 220.0 * d_alt * d_alt;
         }
-        const double max_xy = std::max(std::abs(st.pos_odom.x()), std::abs(st.pos_odom.y()));
+        const double max_xy = std::max(std::abs(pos.x()), std::abs(pos.y()));
         if (max_xy > 2.65) {
           const double d_net = max_xy - 2.65;
           total_cost += 180.0 * d_net * d_net;
         }
 
         // Critic 4: OrientationCritic (keep OAK-D-S2 depth camera aligned with corridor tangent)
-        const double yaw_err = wrapPi(st.yaw_rad - ref.yaw_rad);
+        const double yaw_err = wrapPi(yaw - ref.yaw_rad);
         total_cost += cfg_.w_orientation * yaw_err * yaw_err * cfg_.dt_s;
 
-        // Critic 5: ControlRateCritic (penalize control slew rate)
+        // Critic 5: FovCritic (horizontal motion must stay inside the camera's view of the rollout's heading)
+        const double speed_xy = std::hypot(vel.x(), vel.y());
+        if (cfg_.w_fov > 0.0 && speed_xy > cfg_.fov_min_speed_m_s) {
+          const double c = (vel.x() * std::cos(yaw) + vel.y() * std::sin(yaw)) / speed_xy;
+          if (c < cos_fov) {
+            const double excess = std::acos(std::clamp(c, -1.0, 1.0)) - cfg_.fov_half_angle_rad;
+            total_cost += cfg_.w_fov * excess * excess * speed_xy * cfg_.dt_s;
+          }
+        }
+
+        // Critic 6: ControlRateCritic (penalize control slew rate)
         if (t > 0) {
-          const Eigen::Vector3d du = u_t.vel_cmd_yaw_aligned - prev_u.vel_cmd_yaw_aligned;
+          const Eigen::Vector3d du = u_t.vel_cmd_ned - prev_u.vel_cmd_ned;
           const double dyr = u_t.yaw_rate_cmd_rad_s - prev_u.yaw_rate_cmd_rad_s;
           total_cost += cfg_.w_control_rate * (du.squaredNorm() + 0.5 * dyr * dyr) * cfg_.dt_s;
         }
         prev_u = u_t;
 
-        // Critic 6: GoalCritic (terminal horizon progress)
+        // Critic 7: GoalCritic (terminal horizon progress)
         if (t == T - 1) {
           total_cost += cfg_.w_goal * (pos_err.squaredNorm() + 0.25 * vel_err.squaredNorm());
         }
@@ -407,10 +393,10 @@ TrajectorySetpointCmd MPPIController::computeCommand(
     for (int k = 0; k < K; ++k) {
       const double wk = weights_[k] / weight_sum;
       const MPPIControl& nt = flat_noise_[row_offset + static_cast<std::size_t>(k)];
-      delta_v += wk * nt.vel_cmd_yaw_aligned;
+      delta_v += wk * nt.vel_cmd_ned;
       delta_yr += wk * nt.yaw_rate_cmd_rad_s;
     }
-    u_mean_[t].vel_cmd_yaw_aligned += delta_v;
+    u_mean_[t].vel_cmd_ned += delta_v;
     u_mean_[t].yaw_rate_cmd_rad_s += delta_yr;
     u_mean_[t] = clampControl(u_mean_[t]);
   }
@@ -419,13 +405,21 @@ TrajectorySetpointCmd MPPIController::computeCommand(
 
   // 5. Roll out optimal mean trajectory for visualization & feedforward setpoint extraction
   optimal_rollout_pos_.resize(static_cast<std::size_t>(T + 1));
-  MultirotorRolloutState opt_st = x0;
-  optimal_rollout_pos_[0] = opt_st.pos_odom;
-  MultirotorRolloutState step1_st = x0;
+  optimal_rollout_yaw_.resize(static_cast<std::size_t>(T + 1));
+  QuadState opt_st = x0;
+  optimal_rollout_pos_[0] = state_odom.pos_odom;
+  optimal_rollout_yaw_[0] = cur_yaw;
+  QuadState step1_st = x0;
+  Eigen::Vector3d step1_acc = Eigen::Vector3d::Zero();
   for (int t = 0; t < T; ++t) {
-    opt_st = stepPlant(opt_st, u_mean_[t], cfg_.dt_s);
-    optimal_rollout_pos_[t + 1] = opt_st.pos_odom;
-    if (t == 0) step1_st = opt_st;
+    const Eigen::Vector3d v_before = opt_st.velNed();
+    plant_.stepWorld(opt_st, u_mean_[t].vel_cmd_ned, u_mean_[t].yaw_rate_cmd_rad_s, cfg_.dt_s);
+    optimal_rollout_pos_[t + 1] = opt_st.posNed();
+    optimal_rollout_yaw_[t + 1] = opt_st.yawNed();
+    if (t == 0) {
+      step1_st = opt_st;
+      step1_acc = (opt_st.velNed() - v_before) / cfg_.dt_s;
+    }
   }
 
   // 6. Check FMEA Pillar Dead-Center / Narrow Corridor Blockage
@@ -455,10 +449,7 @@ TrajectorySetpointCmd MPPIController::computeCommand(
     cmd.body_action = {0.0, 0.0, 0.0, 0.0};
   } else {
     const MPPIControl& u0 = u_mean_[0];
-    Eigen::Vector3d v_cmd_odom(
-        cy0 * u0.vel_cmd_yaw_aligned.x() - sy0 * u0.vel_cmd_yaw_aligned.y(),
-        sy0 * u0.vel_cmd_yaw_aligned.x() + cy0 * u0.vel_cmd_yaw_aligned.y(),
-        u0.vel_cmd_yaw_aligned.z());
+    Eigen::Vector3d v_cmd_odom = u0.vel_cmd_ned;
 
     // Exponential Control Barrier Function (CBF) near outer arena net walls (|x|, |y| <= 2.86m)
     if (state_odom.pos_odom.x() > 2.05) {
@@ -476,10 +467,10 @@ TrajectorySetpointCmd MPPIController::computeCommand(
       if (v_cmd_odom.y() < v_lim) v_cmd_odom.y() = v_lim;
     }
 
-    cmd.pos_ned = step1_st.pos_odom;
+    cmd.pos_ned = step1_st.posNed();
     cmd.vel_ned = v_cmd_odom;
-    cmd.acc_ned = step1_st.acc_odom;
-    cmd.yaw_rad = step1_st.yaw_rad;
+    cmd.acc_ned = step1_acc;
+    cmd.yaw_rad = step1_st.yawNed();
     cmd.yawspeed_rad_s = u0.yaw_rate_cmd_rad_s;
 
     const double v_fwd_body = cy0 * v_cmd_odom.x() + sy0 * v_cmd_odom.y();

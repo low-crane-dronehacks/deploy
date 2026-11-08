@@ -12,7 +12,8 @@ find_package(Eigen3 REQUIRED)
 find_package(OpenMP QUIET)
 find_package(GTSAM 4.2 QUIET)        # config/versions.yaml: gtsam 4.2 (ros-jazzy-gtsam)
 
-# 1. Core Maze Planning Library (GroundTruthMap, VoxelCostmap, RRT*, PathTransformer, 2048-rollout MPPI, ControlMux)
+# 1. Core Maze Planning Library (GroundTruthMap, VoxelCostmap, RRT*, PathTransformer, QuadPlant (quad.py port),
+#    MPPI, ControlMux)
 add_library(maze_planning_core SHARED
   distance_grid.cpp
   groundtruth_map.cpp
@@ -20,6 +21,7 @@ add_library(maze_planning_core SHARED
   rrt_star_planner.cpp
   astar_planner.cpp
   path_transformer.cpp
+  quad_plant.cpp
   mppi_controller.cpp
   control_mux.cpp
   c_api.cpp
@@ -96,7 +98,7 @@ if(ament_cmake_FOUND)
   # Standalone RViz demo plant (sim_loopback:=true); never alongside SITL or the drone.
   add_executable(sim_loopback_node ros/sim_loopback_node.cpp)
   ament_target_dependencies(sim_loopback_node rclcpp tf2_ros nav_msgs geometry_msgs)
-  target_link_libraries(sim_loopback_node Eigen3::Eigen)
+  target_link_libraries(sim_loopback_node maze_planning_core)
 
   add_executable(mppi_controller_node ros/mppi_controller_node.cpp)
   target_link_libraries(mppi_controller_node maze_planning_core)

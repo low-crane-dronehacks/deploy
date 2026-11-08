@@ -236,11 +236,52 @@ Nothing downstream (transformer, MPPI, mux, RL lookaheads) changes.
 
 `/viz/mppi_candidates` holds `viz_num_candidates` (default 64; 0 = off) of the sampled rollouts, evenly strided
 over the K samples (namespace `mppi_candidates`, coloured green -> red by log cost), and the optimal rollout
-(namespace `mppi_optimal`, blue). It is published every `viz_candidates_every_n` control ticks (default 5 =
-10 Hz) and only while something subscribes. Markers expire after 0.5 s.
+(namespace `mppi_optimal`, blue), and the heading the plant predicts along it (namespace `mppi_heading`, orange
+arrows every 4th step: compare them with the rollout's direction of travel). It is published every
+`viz_candidates_every_n` control ticks (default 5 = 10 Hz) and only while something subscribes. Markers expire
+after 0.5 s.
+
+### MPPI rollout plant and heading (`src/quad_plant.*`, `src/mppi_controller.cpp`)
+
+- **Plant.** Rollouts step `QuadPlant`: dronehacks-sim `quad.py`'s airframe (1.348 kg deadcat rotor allocation,
+  25-35 ms motor lag, linear/angular drag, 100 Hz substeps) and Lee attitude/thrust stage, driven by **PX4's
+  velocity loop** with the fleet gains (v1.16 `PositionControl::_velocityControl`: `MPC_XY_VEL_{P,I,D}_ACC`
+  1.8/0.4/0.2, `MPC_Z_VEL_{P,I,D}_ACC` 4.0/2.0/0, D on the 5 Hz low-passed velocity derivative, 45 deg tilt
+  limit, tracking anti-windup), because the drone flies on PX4's controller, not quad.py's. A 1 m/s step reaches
+  63% in 0.74 s (quad.py's Lee loop: 0.49 s). PX4's attitude/rate loops are not modelled (the Lee stage stands in)
+  and PX4's integrator state is unobservable, so rollouts start it at zero. `QuadPlantParams::quadPy()` selects
+  quad.py's own loop; `testQuadPlantMatchesQuadPy` checks that against traces from quad.py itself. After
+  changing quad.py, regenerate them
+  (`python3 scripts/gen_quad_reference.py <dronehacks-sim>/dronehacks/quad.py > src/test/quad_reference.inc`) and
+  update `QuadPlantParams`; after changing the fleet's `MPC_*` params, update the `px4_*` fields. Default 1024
+  rollouts (`mppi_samples`); the Jetson budget is still to be measured.
+- **Speed: conservative by default.** Planners (A*, RRT*), the path transformer and MPPI cruise at **1.5 m/s**
+  (`cruise_speed_m_s`), and MPPI limits the 3-D norm of every command to 1.5 m/s (`MPPIConfig::v_max_norm`):
+  skybeta's `flight_interface` scales anything faster back to `max_speed_mps` = 1.5, which would bend MPPI's
+  command off the trajectory it optimised. To go faster, raise both together.
+- **Controls are world-frame** (odom NED velocity + yaw rate), what PX4 Offboard velocity mode and skybeta's
+  `flight_interface` take. The plant converts them to quad.py's yaw-aligned command with the rollout's own
+  heading. Exploration noise and the Pillar Dead-Center left/right split are in the **path** frame (reference
+  tangent), not the body frame: before, a heading off the corridor turned the split into a push along the
+  corridor and MPPI stalled at the pillar (`testMPPIPillarSplitIsPathRelative`).
+- **Heading.** The camera looks along body x, so two critics keep the heading on the direction of travel:
+  orientation (toward the path tangent; node param `mppi_w_orientation`) and FOV (horizontal motion more than
+  `mppi_fov_half_angle_rad` off the heading; `mppi_w_fov`). Neither helps if the reference turns faster than the
+  vehicle can yaw (quad.py: 60 deg/s, with lag), so A* also caps speed at `yaw_rate_max_rad_s / curvature`
+  (AStarConfig, node param `yaw_rate_max_rad_s`, default pi/4; 0 = off). Full course, closed loop on QuadPlant
+  (PX4 loop, 1.5 m/s; heading vs direction of travel while moving, median / p90 / max; closest approach to a wall,
+  lethal radius 0.21 m; time to the pad):
+
+  | A* yaw-rate cap | heading error | min wall clearance | time to pad |
+  | :--- | :--- | :--- | :--- |
+  | off | 18 / 50 / 64 deg | 0.246 m | 14.0 s |
+  | pi/3 (60 deg/s) | 12 / 35 / 52 deg | 0.295 m | 18.1 s |
+  | pi/4 (45 deg/s, default) | 9 / 27 / 50 deg | 0.301 m | 20.1 s |
+
+  The camera's half-FOV is 37 deg. The default is the conservative row; trade lap time back once it flies.
 
 ### Standalone demo
 
-`sim_loopback:=true` runs `sim_loopback_node` (a first-order velocity plant) in place of PX4 and the odometry
-adapter. It owns `/odometry/local` and TF; never run it next to SITL or the drone (the launch file refuses
-`arm:=true` with it).
+`sim_loopback:=true` runs `sim_loopback_node` in place of PX4 and the odometry adapter. It steps the same
+`QuadPlant` MPPI rolls out, so the demo shows real attitude, lag and the yaw-rate limit. It owns
+`/odometry/local` and TF; never run it next to SITL or the drone (the launch file refuses `arm:=true` with it).

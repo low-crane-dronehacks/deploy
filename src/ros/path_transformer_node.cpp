@@ -33,7 +33,7 @@ class PathTransformerNode : public rclcpp::Node {
         tf_listener_(tf_buffer_) {
     map_frame_ = declare_parameter<std::string>("map_frame", "map_ned");
     odom_frame_ = declare_parameter<std::string>("odom_frame", "odom_ned");
-    cruise_speed_m_s_ = declare_parameter<double>("cruise_speed_m_s", 2.60);
+    cruise_speed_m_s_ = declare_parameter<double>("cruise_speed_m_s", 1.50);
 
     pub_local_ref_ = create_publisher<nav_msgs::msg::Path>("/plan/local_reference", 10);
     pub_rl_lookaheads_ =
@@ -101,7 +101,7 @@ class PathTransformerNode : public rclcpp::Node {
   tf2_ros::TransformListener tf_listener_;
   std::string map_frame_{"map"};
   std::string odom_frame_{"odom"};
-  double cruise_speed_m_s_{2.60};
+  double cruise_speed_m_s_{1.50};
 
   PathTransformer transformer_;
   VehicleKinematics state_odom_{};
