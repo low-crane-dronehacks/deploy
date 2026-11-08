@@ -206,51 +206,81 @@ is not an established requirement; do not change it without checking the trainin
 
 ### Flight recording
 
-Start this in a **second terminal on the drone**, before the approved flight. Keep it running through
-landing and disarm. It records PX4 feedback, commanded motion, policy status/depth, VIO and transforms.
-It does not arm or send flight commands.
+Start this in a **second terminal on the drone host**, after the stack and our launch are up, before
+the approved flight. Paste the whole block: it runs the recorder inside the existing skybeta container
+and sources the PX4 and Isaac VSLAM message definitions. It does not arm or send flight commands.
 
 ```bash
-# Paste this whole command on the drone HOST (dronehacks@skybeta-17), not inside the container.
 docker exec -it -e ROS_DOMAIN_ID=25 skybeta-stack bash -c '
 set -e
 source /opt/ros/humble/setup.bash
 source /root/skybeta_ws/install/setup.bash
 source /root/team_ws/install/setup.bash
 mkdir -p /root/team_ws/logs/bags
+cat > /tmp/policynav_bag_qos.yaml <<"EOF"
+/tf_static:
+  durability: transient_local
+  reliability: reliable
+  history: keep_all
+EOF
 FLIGHT_BAG="/root/team_ws/logs/bags/flight_$(date -u +%Y%m%dT%H%M%SZ)"
 echo "Recording to $FLIGHT_BAG"
-exec ros2 bag record -o "$FLIGHT_BAG" \
-  /fmu/out/vehicle_local_position \
-  /fmu/out/vehicle_attitude /fmu/out/estimator_status_flags \
-  /fmu/out/vehicle_status_v1 /fmu/out/vehicle_land_detected \
-  /skybeta/state /skybeta/setpoint/twist /skybeta/setpoint/pose \
-  /policynav/status /policynav/depth/image /policynav/depth/camera_info \
-  /visual_slam/tracking/odometry /visual_slam/status \
-  /tf /tf_static
+exec ros2 bag record -a \
+  -x "(.*/(compressed|compressedDepth|theora)$|.*nitros.*|/oak/(left|right)/image_raw$)" \
+  --qos-profile-overrides-path /tmp/policynav_bag_qos.yaml \
+  --storage sqlite3 --max-bag-size 2000000000 \
+  -o "$FLIGHT_BAG"
 '
 ```
 
-Wait for the recorder to subscribe to the expected live topics before arming. The names above target
-PX4 1.16; check `ros2 topic list` if a topic is missing. The scripted forward flight does not itself
-start policy/depth publishers, so those topics may be absent for that test.
+If already inside the skybeta container, run the contents between `bash -c '` and the closing quote,
+starting with `set -e`, and first set `export ROS_DOMAIN_ID=25`. Do not nest `docker exec` inside it.
 
-After landing, press **Ctrl-C once** in the recording terminal and wait for the recorder to exit so it
-finishes writing the bag and returns to the host shell. To inspect it, replace the timestamp below
-with the path printed when recording started (the variable existed only inside the container command):
+This records all discovered topics except the exclusions, including:
+
+- OAK-D `/oak/left/image_mono`, `/oak/right/image_mono`, camera calibration (`camera_info`), and
+  `/oak/imu/data`. The mono pair permits offline stereo reconstruction.
+- Available `/fmu/out/*` feedback, including attitude, local position and estimator flags;
+  `distance_sensor` is captured only if the firmware actually publishes it (the current build does not).
+- All cuVSLAM and `/policynav/*` topics, including depth, status and handheld outputs when running.
+- `/skybeta/state`, `/skybeta/setpoint/*`, PX4 input topics including the bridge's
+  `/fmu/in/vehicle_visual_odometry`, `/tf`, and `/tf_static`.
+
+The `/tf_static` QoS override requests retained static transforms even when recording starts after
+startup. Exclusions remove compressed/theora transports, Nitros topics and the duplicate `image_raw`
+streams; the mono streams remain. Wait for the recorder to subscribe to the expected topics.
+
+Budget roughly **40–45 MB/s** (about **2.5 GB/minute**) with the mono pair, depending on actual image
+sizes, rates and other active topics. Check current free space with `df -h ~/team_ws/logs/bags` on the
+host; do not assume a fixed amount is free. Bags split into approximately 2 GB SQLite files. Splitting
+limits individual file size, not total disk use. Check recorder load and dropped-message warnings.
+
+Before a flight, make a short **disarmed test recording**, stop it with Ctrl-C, and inspect it using the
+command below. Confirm nonzero counts for both mono images, camera_info, `/oak/imu/data`,
+`/policynav/depth/image`, `/policynav/status`, PX4 feedback and `/tf_static`. `ros2 bag info` should be
+used after stopping: `metadata.yaml` may not exist or be complete while recording. Start a new recorder
+for the flight and keep it running through landing and disarm.
+
+Press **Ctrl-C once** and wait for the recorder to exit and return to the host shell. Replace the path
+below with the one printed when recording started (the variable existed only inside the container):
 
 ```bash
 docker exec -it skybeta-stack bash -c 'source /opt/ros/humble/setup.bash && ros2 bag info "$1"' _ \
   /root/team_ws/logs/bags/flight_REPLACE_WITH_TIMESTAMP
 ```
 
-Check the listed topics and message counts. The bag directory contains `metadata.yaml` and the storage
-file(s). It persists on the drone host at `~/team_ws/logs/bags/flight_<UTC timestamp>/` through the
-workspace mount; stop recording before restarting/removing the stack container.
+Copy the **whole folder**, including `metadata.yaml` and every `_N.db3` file. On the host it is at
+`~/team_ws/logs/bags/flight_<UTC timestamp>/`; inside the container it is the same mounted folder at
+`/root/team_ws/logs/bags/`. Stop recording before restarting/removing the stack container.
 
-For a stereo-debugging **bench** recording, append `/oak/left/image_mono /oak/right/image_mono
-/oak/left/camera_info /oak/right/camera_info` to the record command. Raw stereo adds substantial data;
-check recorder load and available storage before including it in a flight recording.
+If disk space or recording throughput is tight, replace the exclusion regex above with:
+
+```text
+(.*/(compressed|compressedDepth|theora)$|.*nitros.*|/oak/(left|right)/image_(raw|mono)$)
+```
+
+That still records policy depth, camera calibration, IMU and state, but removes the stereo pixels needed
+to rerun stereo offline. Policy depth can still show holes in the recorded depth output.
 
 ## 7. Watching it live: Foxglove on your laptop
 
