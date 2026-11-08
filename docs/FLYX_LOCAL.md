@@ -14,7 +14,7 @@ kept by Colin. Never commit, push or share the FlyX source or images. Only these
 - Deviations from their pins (22.04 host, cupy 13.6 + numpy 1.26 in Isaac's python) are listed in `NOTES.md`
   in that volume.
 
-pear-deepak cannot run it: driver 550 < 580, and their native tracker is built for RTX 50-series (SM120).
+A second lab PC cannot run it: driver 550 < 580, and their native tracker is built for RTX 50-series (SM120).
 
 ## Host prerequisite
 FastDDS needs 16 MB UDP buffers, or sensor frames are dropped and the sim falls to ~0.1x real time. Run this

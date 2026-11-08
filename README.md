@@ -2,7 +2,7 @@
 
 Drone software for DroneHacks 2026: one ROS 2 / PX4 stack that runs **unchanged** on the aircraft, on our
 PX4 SITL rig, and in the organizers' simulator. Only the hardware layer differs (`hardware:=drone|sitl|flyx`).
-Policies are trained in [dronehacks-sim](https://github.com/ColinBalfour/dronehacks-sim) and exported here as
+Policies are trained in [dronesim](https://github.com/low-crane-dronehacks/dronesim) and exported here as
 NumPy `.npz` files (no torch needed on the drone).
 
 ```
@@ -43,7 +43,7 @@ are in `policynav/mission.py`. `python3 -m pytest -q tests` runs the pure tests.
 ## Status
 
 - [x] policy node, dry-run verified in the organizers' sim and in SITL (actions match training)
-- [x] SITL rig (pear-deepak), truth-based external vision, 4S battery sag (docs/SITL.md)
+- [x] SITL rig (lab PC), truth-based external vision, 4S battery sag (docs/SITL.md)
 - [x] organizers' sim installed locally on pear-omen; needs the host UDP-buffer sysctl to stay real-time (docs/FLYX_LOCAL.md)
 - [ ] skybeta mode (docs/SKYBETA.md): stereo depth + policy via /skybeta/setpoint/twist; written + pure tests, not yet run on the Jetson
 - [ ] handheld mode (`hardware:=handheld`): written + pure tests; first run on the Jetson/laptop with the OAK

@@ -9,7 +9,7 @@ Evaluation only: tests the policy node on real PX4 software. Never a training ta
 - Micro-XRCE-DDS agent and ROS 2 Jazzy bridges for `/clock`, depth and camera_info.
 - Truth-based external vision (`sitl/ev_bridge.py`): the Gazebo pose plus noise goes to EKF2 in place of VIO.
 
-**Commands** (a lab PC with Docker and the NVIDIA runtime; built and verified on pear-deepak):
+**Commands** (a lab PC with Docker and the NVIDIA runtime; built and verified on a lab PC):
 ```bash
 sitl/run_rig.sh build            # once; JOBS=n caps compile parallelism
 sitl/run_rig.sh up               # ~90 s to READY; logs in the container under /tmp/rig/*.log
