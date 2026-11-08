@@ -34,12 +34,12 @@ ARGUMENTS = [
     ('odometry_topic', '/visual_slam/tracking/odometry', 'ENU pose source'),
     # ours
     ('mode', 'fly', 'fly | handheld (props off: no flight interface, no setpoints)'),
-    ('policy', 'policies/cur4_clean50_800.npz', 'exported policy (.npz), relative to the package share'),
+    ('policy', 'policies/anneal_slow_b128_3255.npz', 'exported policy (.npz), relative to the package share'),
     ('stereo_backend', 'vpi', 'vpi (C++ vpi_stereo, CUDA census+SGM) | sgbm (OpenCV, CPU, ~29 ms at 640x400 on 6 cores)'),
     ('max_disparity', '96', 'stereo search range at 640 px: min range = f*B/max (~0.33 m at 96, 0.40 m at 80)'),
     ('depth_rate_hz', '13.5', 'stereo rate, averaged by camera stamps (training models 13.5-15 Hz frames)'),
     ('speed_cap', '1.45', 'our own cap on |v| (m/s), under the interface clamp'),
-    ('yaw_rate_cap', '0.6', 'rad/s; the interface does not limit yaw, and stereo VO loses track when spun fast'),
+    ('yaw_rate_cap', '0.0', 'rad/s; 0 = the policy\'s trained yaw limit (clamping below it is out of distribution); stereo VO dislikes fast spins'),
     ('max_flight_s', '120.0', 'then /skybeta/hold'),
     ('dds_profile', 'team', 'team (config/fastdds_team.xml: skybeta\'s localhost profile + 8 MiB SHM segment, our '
                             'nodes only) | stack (inherit skybeta\'s profile unchanged)'),

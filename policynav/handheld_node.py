@@ -203,7 +203,7 @@ class Handheld(Node):
         self._tm('d camera->policy start (age)', 1e3 * (t - self.depth_stamp))
         t0 = time.perf_counter()
         img = self.stack.push(self.depth_img)
-        pro = O.proprio(vel, q, rng, self.prev_action, self.v_max)
+        pro = O.proprio(vel, q, rng, self.prev_action, self.meta.get('v_obs_scale', self.v_max))
         a = np.clip(self.policy(img, pro), -1.0, 1.0).astype(np.float32)
         self.timing.append(time.perf_counter() - t0)
         self._tm('e policy forward', 1e3 * (time.perf_counter() - t0))

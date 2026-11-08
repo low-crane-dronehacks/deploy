@@ -55,7 +55,7 @@ class Skybeta(Node):
         self.n_act = self.meta['num_actions']
         self.v_max, self.yaw_max = self.meta['v_max'], self.meta['yaw_rate_max']
         self.speed_cap = float(dp('speed_cap', 1.45))             # stay under the interface's 1.5 m/s norm clamp
-        self.yaw_cap = float(dp('yaw_rate_cap', 0.6))             # rad/s: the interface does not limit yaw; VO does
+        self.yaw_cap = float(dp('yaw_rate_cap', 0.0)) or float(self.yaw_max)   # 0 = the policy's trained yaw limit; VO dislikes fast spins
         self.max_flight_s = float(dp('max_flight_s', 120.0))
         self.depth_stale_s, self.depth_lost_s = float(dp('depth_stale_s', 0.5)), float(dp('depth_lost_s', 2.0))
         self.odom_lost_s = float(dp('odom_lost_s', 0.5))
@@ -209,7 +209,7 @@ class Skybeta(Node):
             return
         t0 = time.perf_counter()
         img = self.stack.push(self.depth_img)
-        pro = O.proprio(self.vel, self.q, rng, self.prev_action, self.v_max)
+        pro = O.proprio(self.vel, self.q, rng, self.prev_action, self.meta.get('v_obs_scale', self.v_max))
         a = np.clip(self.policy(img, pro), -1.0, 1.0).astype(np.float32)
         self.prev_action = a
         vel_ned, yawspeed = O.action_to_setpoint(a[:4], self.q, self.v_max, self.yaw_max)
