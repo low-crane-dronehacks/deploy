@@ -131,3 +131,37 @@ def test_rate_gate_hits_the_average_rate_from_30fps(rate):
     stamps = np.arange(0, 20.0, 1 / 30.0) + rng.normal(0, 0.002, 600)    # 30 fps with 2 ms jitter
     n = sum(g.accept(float(t)) for t in stamps)
     assert abs(n / 20.0 - rate) < 0.15
+
+
+def test_pairer_survives_bursty_delivery():
+    from policynav.stereo import StereoPairer
+    p, dt = StereoPairer(slop_s=0.005), 1 / 30
+    out = []
+    for burst in range(5):                       # each eye's 3 frames arrive back to back, left burst first
+        ts = [burst * 3 * dt + k * dt for k in range(3)]
+        for t in ts:
+            r = p.push('l', t, ('L', t))
+            assert r is None
+        for t in ts:
+            r = p.push('r', t + 0.001, ('R', t))
+            if r: out.append(r)
+    assert len(out) == 15                         # every frame pairs (the latest-only pairer kept ~1 in 3)
+    assert all(l[1] == r[1] for l, r, _ in out)   # the pairs match by stamp
+
+
+def test_pairer_prefers_newest_pair_and_never_reorders():
+    from policynav.stereo import StereoPairer
+    p = StereoPairer(slop_s=0.005)
+    for t in (0.0, 0.033, 0.066):
+        p.push('l', t, t)
+    r = p.push('r', 0.0661, 0.0661)              # newest right matches the newest left: older lefts are skipped
+    assert r and r[0] == 0.066
+    assert p.push('r', 0.0331, 0.0331) is None   # an older right can no longer pair (already past it)
+    assert p.skipped >= 2
+
+
+def test_pairer_rejects_out_of_slop():
+    from policynav.stereo import StereoPairer
+    p = StereoPairer(slop_s=0.005)
+    p.push('l', 1.0, 'a')
+    assert p.push('r', 1.02, 'b') is None

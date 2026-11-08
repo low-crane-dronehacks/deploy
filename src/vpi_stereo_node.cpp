@@ -24,6 +24,7 @@
 #include <cstdio>
 #include <cmath>
 #include <cstring>
+#include <deque>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -114,12 +115,12 @@ class VpiStereo : public rclcpp::Node {
     });
     sub_l_ = create_subscription<Image>(img_l + "/" + img, qos, [this](Image::ConstSharedPtr m) {
       times_.add("0 camera->rx left (age)", 1e3 * (now().seconds() - stamp_s(m->header.stamp)));
-      left_ = m;
+      push(buf_l_, m);
       try_pair();
     });
     sub_r_ = create_subscription<Image>(img_r + "/" + img, qos, [this](Image::ConstSharedPtr m) {
       times_.add("0 camera->rx right (age)", 1e3 * (now().seconds() - stamp_s(m->header.stamp)));
-      right_ = m;
+      push(buf_r_, m);
       try_pair();
     });
     const double report_s = declare_parameter<double>("timing_report_s", 5.0);
@@ -258,22 +259,59 @@ class VpiStereo : public rclcpp::Node {
     VPI_CHECK(vpiImageUnlock(dst));
   }
 
+  // Keep each eye's last kPairBuf frames sorted by camera stamp. Keeping only the latest frame per eye lost valid
+  // pairs whenever delivery was bursty (L1 L2 L3 R1 R2 R3: L1/L2 overwritten before R1/R2 arrive), which starved
+  // depth to ~1 Hz on the drone even though the camera stamps stayed at 30 Hz. Mirrors policynav/stereo.py
+  // StereoPairer (unit-tested there).
+  static constexpr size_t kPairBuf = 6;
+  void push(std::deque<Image::ConstSharedPtr>& b, const Image::ConstSharedPtr& m) {
+    const double t = stamp_s(m->header.stamp);
+    auto it = b.begin();
+    while (it != b.end() && stamp_s((*it)->header.stamp) <= t) ++it;
+    b.insert(it, m);
+    while (b.size() > kPairBuf) {
+      b.pop_front();
+      ++unpaired_;
+    }
+  }
+
   void try_pair() {
-    if (!left_ || !right_) return;
-    const double tl = stamp_s(left_->header.stamp), tr = stamp_s(right_->header.stamp);
-    if (std::abs(tl - tr) > slop_s_) {                      // drop the older eye and wait for its partner
-      if (++unpaired_ % 150 == 0)
-        RCLCPP_WARN(get_logger(), "%zu images without a partner within %.1f ms", unpaired_, slop_s_ * 1e3);
-      (tl < tr ? left_ : right_).reset();
+    // newest left frame that has a right partner within slop (nearest stamp); drop everything at or before it
+    Image::ConstSharedPtr l, r;
+    double tl = 0.0, tr = 0.0;
+    for (auto il = buf_l_.rbegin(); il != buf_l_.rend() && !l; ++il) {
+      const double t_l = stamp_s((*il)->header.stamp);
+      double best = slop_s_;
+      for (const auto& cand : buf_r_) {
+        const double d = std::abs(t_l - stamp_s(cand->header.stamp));
+        if (d <= best) {
+          best = d;
+          r = cand;
+        }
+      }
+      if (r) {
+        l = *il;
+        tl = t_l;
+        tr = stamp_s(r->header.stamp);
+      }
+    }
+    if (!l) {
+      if (buf_l_.size() >= kPairBuf && buf_r_.size() >= kPairBuf)
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "no left/right pair within %.1f ms in the last %zu frames",
+                             slop_s_ * 1e3, kPairBuf);
       return;
     }
-    auto l = left_, r = right_;
-    left_.reset();
-    right_.reset();
+    const double cut = std::max(tl, tr);
+    for (auto* b : {&buf_l_, &buf_r_}) {
+      const size_t before = b->size();
+      while (!b->empty() && stamp_s(b->front()->header.stamp) <= cut) b->pop_front();
+      unpaired_ += before - b->size() - 1;   // frames skipped without being matched (the pair itself excluded)
+    }
     // Match at most rate_hz (15 Hz, as trained), decimating on camera stamps. The 0.8 tolerance matters: with 30 Hz
     // input, a strict 1/rate_hz gap rejects every other pair about half the time (stamp jitter puts it a hair under
     // 66.7 ms), which halves the rate to ~10 Hz.
     const double now_s = tl;
+    if (now_s < t_last_ - 1.0) t_last_ = -1e9;              // camera clock stepped back: do not stall forever
     if (now_s - t_last_ < 0.8 / rate_hz_) { ++n_decimated_; return; }
     if (!info_l_ || !info_r_) {
       RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000, "waiting for /oak/{left,right}/camera_info");
@@ -400,7 +438,7 @@ class VpiStereo : public rclcpp::Node {
   VPIStream stream_ = nullptr;
   VPIPayload payload_ = nullptr;
   VPIImage in8_l_ = nullptr, in8_r_ = nullptr, in16_l_ = nullptr, in16_r_ = nullptr, disp_ = nullptr, conf_ = nullptr;
-  Image::ConstSharedPtr left_, right_;
+  std::deque<Image::ConstSharedPtr> buf_l_, buf_r_;
   CameraInfo::ConstSharedPtr info_l_, info_r_;
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;

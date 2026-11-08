@@ -70,6 +70,7 @@ class DepthNode(Node):
         self.maps = None
         self.last = {'l': None, 'r': None}
         self.gate = S.RateGate(self.rate_hz)
+        self.pairer = S.StereoPairer(self.slop)
         self.n = {'pairs': 0, 'dropped': 0, 'unsynced': 0}
         self.ms, self.valid = [], []
         for side, ns in (('l', ns_l), ('r', ns_r)):
@@ -142,16 +143,14 @@ class DepthNode(Node):
                                f' min range {self.fx * abs(self.baseline) / self.p.max_disparity:.2f} m')
 
     def _on_img(self, side, m):
-        self.last[side] = m
-        l, r = self.last['l'], self.last['r']
-        if self.maps is None or l is None or r is None:
+        if self.maps is None:
             return
-        tl = l.header.stamp.sec + 1e-9 * l.header.stamp.nanosec
-        tr = r.header.stamp.sec + 1e-9 * r.header.stamp.nanosec
-        if abs(tl - tr) > self.slop:
-            self.n['unsynced'] += 1
+        t = m.header.stamp.sec + 1e-9 * m.header.stamp.nanosec
+        pair = self.pairer.push(side, t, m)          # newest left/right pair by camera stamp (burst-tolerant)
+        self.n['unsynced'] = self.pairer.skipped
+        if pair is None:
             return
-        self.last = {'l': None, 'r': None}
+        l, r, tl = pair
         if not self.gate.accept(tl):                  # by camera stamp: average exactly rate_hz
             self.n['dropped'] += 1
             return
