@@ -20,7 +20,11 @@ find_package(px4_msgs QUIET)
 set(SRC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../src")
 
 add_executable(control_mux_node ${SRC_ROOT}/ros/control_mux_node.cpp)
-target_include_directories(control_mux_node PRIVATE ${SRC_ROOT}/include)
+target_include_directories(control_mux_node PRIVATE
+  ${SRC_ROOT}/include
+  ${EIGEN3_INCLUDE_DIRS}
+)
+target_link_libraries(control_mux_node Eigen3::Eigen)
 ament_target_dependencies(control_mux_node
   rclcpp nav_msgs std_msgs geometry_msgs pkg_maze_planning
 )

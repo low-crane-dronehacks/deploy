@@ -86,7 +86,7 @@ if(ament_cmake_FOUND)
     ament_target_dependencies(maze_planning_node px4_msgs)
   endif()
 
-  ament_export_include_directories(include)
+  ament_export_include_directories(include ${EIGEN3_INCLUDE_DIRS})
   ament_export_libraries(maze_planning_core)
 
   install(TARGETS maze_planning_core
