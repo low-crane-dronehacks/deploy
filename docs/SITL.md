@@ -83,8 +83,22 @@ Checked (2026-11-08, no arming): `truth` -> PX4 xy/z/heading valid at the launch
 on the pad (265 features/frame), EKF2 fusing EV position + height + yaw (`cs_ev_pos/hgt/yaw`, `cs_yaw_align`),
 heading good for control, "Ready for takeoff". Not checked: anything in flight.
 
-**Open:** the course mesh is untextured (flat grey), so cuVSLAM sees few features once it moves; texturing the world is
-the next step before trusting `EV_SOURCE=cuvslam` in flight. Note the origin difference above when comparing positions
+**Textured world (`TEXTURES=1`, default since 2026-11-08).** The flat grey course gave cuVSLAM almost nothing to track:
+two SITL takeoffs on `EV_SOURCE=cuvslam` lost tracking within ~1 s of motion (height stuck at 0, yaw sign wrong,
+then a 20 m jump) and the drone hit the corridor wall. `sitl/texture_world.py` (run by `run_native.sh` into the run's
+world dir) adds visual-only meshes with box-projected texture coordinates: orange mottled walls + tunnel, light blue
+window panel, grey carpet, see-through black netting (alpha-tested `net.png`), grey stone boulders, off-white paint,
+and a cinder-block hall (walls at +-7 m, 4.5 m ceiling, no shadows) so the cameras see structure through the nets
+instead of empty sky. Collision meshes are unchanged. Textures: `sitl/world/textures/` from
+`sitl/make_textures.py` (walls/window take their colours from two photos; carpet, net, stone, hall are generated).
+`sitl/export_world.py` also writes `course_faces.npz` (each course.obj face's group). From the launch mark the left
+camera now gets ~760 FAST corners and 88% valid stereo disparity (flat world: a few dozen corners on edges).
+First textured flight (cuVSLAM stereo-only): vision matched truth to 1-3 cm / 1 deg through the takeoff, then drifted
+0.2-0.4 m forward facing the corridor-end wall at ~0.5 m and the drone turned early into the wall end. The wall texture
+was then made brighter / higher-contrast in mono (orange is a dark grey to the mono cameras) and repeats every 0.75 m.
+
+**PX4 flight logs** go to `~/dronehacks_px4_logs/<date>/` (`PX4_LOG_DIR`): `run_native.sh up` wipes the run dir, which
+used to hold them (every restart deleted the previous flights' logs until 2026-11-08). Note the origin difference above when comparing positions
 between the two sources (e.g. the maze stack's static `map_ned -> odom_ned` launch-mark offset assumes PX4's origin
 is at the launch mark, which holds for `cuvslam`, not for `truth`).
 

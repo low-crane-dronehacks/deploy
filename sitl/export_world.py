@@ -2,7 +2,8 @@
 
     DRONEHACKS_SIM=~/dronehacks-sim python sitl/export_world.py --out sitl/world
 
-Writes world/course.obj (ENU, metres; Gazebo is ENU/FLU, our assets are NED) and world/dronehacks.sdf with the
+Writes world/course.obj (ENU, metres; Gazebo is ENU/FLU, our assets are NED), world/course_faces.npz (its faces'
+groups: wall/tunnel/boulder/paint, for sitl/texture_world.py) and world/dronehacks.sdf with the
 course as one static collision+visual mesh, a ground plane, a light, and the PX4 spawn note. The boundary net is
 NOT included as a visual (a stereo camera sees through it); it is a thin collision shell so the drone cannot
 leave the arena.
@@ -19,7 +20,7 @@ import numpy as np
 # Needs the training repo (dronehacks-sim) for the course mesh: DRONEHACKS_SIM=/path/to/dronehacks-sim
 SIM = os.environ.get('DRONEHACKS_SIM', os.path.expanduser('~/dronehacks-sim'))
 sys.path.insert(0, SIM)
-from dronehacks.mesh import CourseMesh  # noqa: E402
+from dronehacks.mesh import GROUPS, CourseMesh  # noqa: E402
 
 ASSETS = os.path.join(SIM, 'assets')
 
@@ -81,7 +82,11 @@ def main(argv=None) -> None:
     a = ap.parse_args(argv)
     os.makedirs(a.out, exist_ok=True)
     course = CourseMesh.load(os.path.join(ASSETS, 'course.npz'))
-    write_obj(course.select(('wall', 'tunnel', 'boulder', 'paint')), os.path.join(a.out, 'course.obj'))
+    vis = course.select(('wall', 'tunnel', 'boulder', 'paint'))
+    write_obj(vis, os.path.join(a.out, 'course.obj'))
+    # group name per course.obj face (same order), for sitl/texture_world.py's per-material visual meshes
+    np.savez_compressed(os.path.join(a.out, 'course_faces.npz'), group=vis.face_group.astype(np.int8),
+                        names=np.array(GROUPS))
     write_obj(course.select(('net',)), os.path.join(a.out, 'net.obj'))
     with open(os.path.join(a.out, 'dronehacks.sdf'), 'w') as f:
         f.write(SDF)

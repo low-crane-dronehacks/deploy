@@ -13,6 +13,9 @@ import numpy as np
 src, dst = sys.argv[1:3]
 os.makedirs(dst, exist_ok=True)
 for f in glob.glob(os.path.join(src, '*')):
+    if os.path.isdir(f):                       # e.g. textures/
+        shutil.copytree(f, os.path.join(dst, os.path.basename(f)), dirs_exist_ok=True)
+        continue
     if not f.endswith('.obj'):
         shutil.copy(f, dst)
         continue

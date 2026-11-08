@@ -11,7 +11,7 @@
 # Options (environment):
 #   EV_SOURCE=truth   (default) Gazebo's true pose + noise -> PX4 external vision (sitl/ev_bridge.py), as the rig
 #   EV_SOURCE=cuvslam stereo + IMU from the model -> cuVSLAM (onboard/slam, venv) -> onboard/vio/ev_bridge.py -> PX4,
-#                     the real drone's chain. The untextured world gives cuVSLAM little to track (texture: TODO).
+#                     the real drone's chain.
 #                     Gazebo's truth is still published, on /sitl/truth_odometry (px4_msgs/VehicleOdometry, NED).
 #                     cuVSLAM runs Inertial (stereo + IMU, vio.yaml) unless VSLAM_IMU=0; SKYBETA=1 defaults to
 #                     VSLAM_IMU=0, stereo only, as skybeta runs it on the drone ("IMU fusion off", SKYBETA.md).
@@ -27,6 +27,10 @@
 #                     world (EV_HEADING=odom). Needs EV_SOURCE=cuvslam or truth_odom. Then: the team node (e.g.
 #                     climb_forward_hold_skybeta.py fly:=true) + python3 sitl/sim_pilot.py --arm (arms; approval).
 #   GUI=1             (default) open the Gazebo window; GUI=0 = headless
+#   TEXTURES=1        (default) textured course (sitl/texture_world.py: orange walls, blue window, grey carpet,
+#                     see-through net, stone boulders); TEXTURES=0 = the flat grey world. Collision is the same.
+#   PX4_LOG_DIR       where PX4's .ulg flight logs go (default ~/dronehacks_px4_logs/<date>/): kept across runs; the
+#                     run dir (RUN_DIR, default /tmp/dronehacks-native) is wiped on every 'up'.
 #   MODEL=dronehacks_stereo (default): OUR quad (sitl/models/make_dronehacks_quad.py, from the training plant:
 #                     1.5 kg, rotors +-0.13 m, 10 N each, ~0.25 m reach) + OAK depth + stereo + IMU at the nose;
 #                     PX4 gets the matching mixer (CA_ROTOR*), hover thrust and scaled rate gains below
@@ -46,8 +50,8 @@ set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"; REPO="$(cd "$HERE/.." && pwd)"
 PX4_DIR=${PX4_DIR:-$HOME/PX4-v1.17}; B=$PX4_DIR/build/px4_sitl_default
 WS=${PX4_MSGS_WS:-$HOME/isam2_ws}; AGENT=${XRCE_AGENT:-$HOME/Micro-XRCE-DDS-Agent/build/MicroXRCEAgent}
-VENV=${CUVSLAM_VENV:-$HOME/cuvslam-venv}; RUN=${RUN_DIR:-/tmp/dronehacks-native}
-EV_SOURCE=${EV_SOURCE:-truth}; GUI=${GUI:-1}; MODEL=${MODEL:-dronehacks_stereo}; WORLD=dronehacks; NAME=${MODEL}_0
+VENV=${CUVSLAM_VENV:-$HOME/cuvslam-venv}; RUN=${RUN_DIR:-/tmp/dronehacks-native}; PX4_LOGS=${PX4_LOG_DIR:-$HOME/dronehacks_px4_logs}
+EV_SOURCE=${EV_SOURCE:-truth}; GUI=${GUI:-1}; TEXTURES=${TEXTURES:-1}; MODEL=${MODEL:-dronehacks_stereo}; WORLD=dronehacks; NAME=${MODEL}_0
 PIDS=$RUN/pids
 
 env_setup() {   # clean ROS environment: no conda, ROS + px4_msgs workspace, our + PX4's Gazebo resources
@@ -102,13 +106,18 @@ up() {
     echo "stop it first (its own 'run_native.sh down', with its RUN_DIR)"; exit 1
   fi
   rm -rf "$RUN"; mkdir -p "$RUN/models" "$RUN/rootfs"; : > "$PIDS"
+  # PX4 flight logs outlive the run dir (wiped above on every up): rootfs/log -> $PX4_LOGS/<date>/*.ulg
+  mkdir -p "$PX4_LOGS"; ln -s "$PX4_LOGS" "$RUN/rootfs/log"
   env_setup
   echo "$GZ_PARTITION" > "$RUN/gz_partition"
   local DOMAIN=${ROS_DOMAIN_ID:-0}
-  echo "native SITL: model $MODEL, EV_SOURCE=$EV_SOURCE, SKYBETA=$SKYBETA, VSLAM_IMU=$VSLAM_IMU, spawn ${SPAWN_POSE:-${SPAWN:-launch}}, GUI=$GUI, ROS_DOMAIN_ID=$DOMAIN, logs in $RUN"
+  echo "native SITL: model $MODEL, EV_SOURCE=$EV_SOURCE, SKYBETA=$SKYBETA, VSLAM_IMU=$VSLAM_IMU, spawn ${SPAWN_POSE:-${SPAWN:-launch}}, GUI=$GUI, ROS_DOMAIN_ID=$DOMAIN, logs in $RUN, PX4 flight logs in $PX4_LOGS"
 
   # 1. world (normals added: gz-physics crashes on normal-less OBJ meshes) + private model copies
   python3 "$HERE/add_normals.py" "$HERE/world" "$RUN/world" > "$RUN/world.log" 2>&1
+  if [ "$TEXTURES" = 1 ]; then   # textured visual meshes (walls, window, carpet, net, boulders); collision unchanged
+    python3 "$HERE/texture_world.py" "$RUN/world" >> "$RUN/world.log" 2>&1 || { echo "texture_world.py failed: $RUN/world.log"; exit 1; }
+  fi
   cp -r "$PX4_GZ_MODELS/x500" "$PX4_GZ_MODELS/x500_depth" "$RUN/models/"
   [ -d "$PX4_GZ_MODELS/x500_base" ] && cp -r "$PX4_GZ_MODELS/x500_base" "$RUN/models/"
   cp -r "$HERE/models/x500_stereo" "$HERE/models/dronehacks_quad" "$HERE/models/dronehacks_stereo" "$RUN/models/"
