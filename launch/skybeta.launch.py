@@ -8,6 +8,7 @@ Set in /etc/skybeta/drone.env:  COMPETITOR_PKG=policynav  COMPETITOR_LAUNCH=skyb
     ros2 launch policynav skybeta.launch.py policy:=policies/<name>.npz
     ros2 launch policynav skybeta.launch.py dds_profile:=stack            # our nodes on skybeta's DDS profile as-is
     ros2 launch policynav skybeta.launch.py nice:=0 cpus:=3-5             # CPU placement of OUR nodes (see below)
+    ros2 launch policynav skybeta.launch.py target_system:=<id>           # another aircraft: its FC's MAV_SYS_ID
 
 flight_interface is kept exactly as skybeta's competitor_example starts it (it owns the Offboard heartbeat and
 the safety envelope). mode:=handheld does not start it and publishes no setpoints at all.
@@ -32,6 +33,8 @@ ARGUMENTS = [
     ('allow_mode_request', 'false', 'SIM ONLY: enable /skybeta/request_offboard'),
     ('auto_offboard_on_arm', 'true', 'enter Offboard once when the pilot arms, then switches to Position'),
     ('odometry_topic', '/visual_slam/tracking/odometry', 'ENU pose source'),
+    ('target_system', '25', "the FC's MAV_SYS_ID (vehicle_status.system_id; skybeta-17's FC is 25). PX4 silently "
+                            "ignores the Offboard request on a mismatch, and flight_interface's own default is 1"),
     # ours
     ('mode', 'fly', 'fly | handheld (props off: no flight interface, no setpoints)'),
     ('policy', 'policies/anneal_slow_b128_3255.npz', 'exported policy (.npz), relative to the package share'),
@@ -109,7 +112,8 @@ def nodes(context):
         package='skybeta_flight_interface', executable='flight_interface', name='flight_interface',
         output='screen', emulate_tty=True, condition=fly,
         parameters=[{k: lc(k) for k in ('max_altitude_m', 'min_altitude_m', 'max_speed_mps', 'setpoint_rate_hz',
-                                        'allow_mode_request', 'auto_offboard_on_arm', 'odometry_topic')}],
+                                        'allow_mode_request', 'auto_offboard_on_arm', 'odometry_topic',
+                                        'target_system')}],
     )
     depth = Node(
         package='policynav', executable='stereo_depth', name='policynav_depth', prefix=prefix, output='screen', emulate_tty=True, additional_env=ours,
