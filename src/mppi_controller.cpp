@@ -23,6 +23,7 @@ void MPPIController::reset() {
   costs_.assign(static_cast<std::size_t>(cfg_.num_samples), 0.0);
   weights_.assign(static_cast<std::size_t>(cfg_.num_samples), 0.0);
   horizon_refs_.resize(static_cast<std::size_t>(cfg_.horizon_steps));
+  horizon_safe_.assign(static_cast<std::size_t>(cfg_.horizon_steps), cfg_.safe_distance_m);
   optimal_rollout_pos_.clear();
   candidates_ = MPPICandidateSet{};
   consecutive_stall_ticks_ = 0;
@@ -194,6 +195,14 @@ TrajectorySetpointCmd MPPIController::computeCommand(
   for (int t = 0; t < T; ++t) {
     horizon_refs_[t] = local_ref_odom.sampleByTime(t0_ref + (t + 1) * cfg_.dt_s);
   }
+  horizon_safe_.assign(static_cast<std::size_t>(T), cfg_.safe_distance_m);
+  if (cfg_.adaptive_safe_distance) {
+    const double floor_safe = cfg_.lethal_distance_m + cfg_.adaptive_safe_margin_m;
+    for (int t = 0; t < T; ++t) {
+      const double c_ref = queryClearanceOdom(horizon_refs_[t].pos);
+      horizon_safe_[t] = std::clamp(c_ref, floor_safe, cfg_.safe_distance_m);
+    }
+  }
 
   // 2. Shift warm-start mean sequence by 1 step and blend with nominal reference velocity prior
   for (int t = 0; t < T - 1; ++t) {
@@ -328,8 +337,8 @@ TrajectorySetpointCmd MPPIController::computeCommand(
         const double d_obs = queryClearanceOdom(st.pos_odom);
         if (d_obs <= cfg_.lethal_distance_m) {
           total_cost += cfg_.w_obstacles * (22.0 + 160.0 * (cfg_.lethal_distance_m - d_obs));
-        } else if (d_obs < cfg_.safe_distance_m) {
-          const double diff = cfg_.safe_distance_m - d_obs;
+        } else if (d_obs < horizon_safe_[t]) {
+          const double diff = horizon_safe_[t] - d_obs;
           total_cost += cfg_.w_obstacles * (0.65 * diff * diff +
                         0.12 * (diff * diff * diff) / std::max(0.03, d_obs - cfg_.lethal_distance_m));
         }

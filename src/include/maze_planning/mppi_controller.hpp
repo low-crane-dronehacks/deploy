@@ -67,6 +67,11 @@ struct MPPIConfig {
   double w_control_rate{1.4};       // ControlRateCritic: control slew-rate smoothness
 
   double safe_distance_m{0.42};     // obstacle comfort inflation radius (m)
+  // Never ask for more comfort than the reference itself has: per horizon step the comfort radius is
+  // clamp(clearance at the reference point, lethal + adaptive_margin, safe_distance). Without it MPPI refuses a
+  // planned pass that is legitimately tight (corridor_end needs ~0.24 m to clear its checkpoint) and stalls.
+  bool adaptive_safe_distance{true};
+  double adaptive_safe_margin_m{0.02};
   double lethal_distance_m{0.21};   // hard collision radius (m)
   double drone_radius_m{0.21};      // physical collision radius for FMEA Pillar Dead-Center check
   double stall_cost_threshold{850.0};
@@ -167,6 +172,7 @@ class MPPIController {
   std::vector<double> costs_;
   std::vector<double> weights_;
   std::vector<PathPoint> horizon_refs_;
+  std::vector<double> horizon_safe_;   // comfort radius per horizon step (adaptive_safe_distance)
   std::vector<Eigen::Vector3d> optimal_rollout_pos_;
   MPPICandidateSet candidates_;
   double last_solve_ms_{0.0};

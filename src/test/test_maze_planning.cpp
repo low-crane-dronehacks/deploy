@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "maze_planning/astar_planner.hpp"
 #include "maze_planning/c_api.h"
 #include "maze_planning/control_mux.hpp"
 #include "maze_planning/course_progress.hpp"
@@ -321,11 +322,98 @@ void testMPPICandidateRollouts() {
               c.min_cost, c.max_cost);
 }
 
+// Checkpoints from config/arena_prior.json (one per checkpoint, the window for checkpoint 3), then the pad.
+std::vector<PlanGoal> courseGoalsFromArenaPrior() {
+  auto g = [](const char* name, double cx, double cy, double cz, double ax, double ay, double bx, double by,
+              double nx, double ny) {
+    PlanGoal q;
+    q.normal = Eigen::Vector2d(nx, ny);
+    q.name = name;
+    q.center = Eigen::Vector3d(cx, cy, cz);
+    q.has_segment = true;
+    q.seg_a = Eigen::Vector2d(ax, ay);
+    q.seg_b = Eigen::Vector2d(bx, by);
+    return q;
+  };
+  std::vector<PlanGoal> goals = {
+      g("corridor_end", 2.5844, -2.5739, -0.8, 2.5844, -3.048, 2.5844, -1.9304, 1.0, 0.0),
+      g("gate_a", 2.5601, 0.3048, -0.8, 2.1209, 0.3048, 3.048, 0.3048, 0.0, 1.0),
+      g("tunnel_exit", -0.3048, 2.3114, -0.8, -0.3048, 1.5748, -0.3048, 3.048, -1.0, 0.0),
+      g("window", -2.283, -0.475, -0.78, -2.7015, -0.6273, -1.8423, -0.3146, 0.34202, -0.939693),
+  };
+  PlanGoal pad;
+  pad.name = "pad";
+  pad.center = Eigen::Vector3d(-0.7925, -2.0422, -0.8);
+  goals.push_back(pad);
+  return goals;
+}
+
+void testAStarPlannerCourse() {
+  auto gt = std::make_shared<GroundTruthMap>();
+  gt->loadFromBinary("config/course_groundtruth.bin");
+  AStarConfig cfg{};
+  AStarPlanner astar(cfg, gt);
+  const auto goals = courseGoalsFromArenaPrior();
+  const Eigen::Vector3d launch(0.9144, -2.5146, -0.8);
+
+  const AStarPlanResult r = astar.plan(launch, goals);
+  CHECK(r.ok, "A* course plan failed");
+  CHECK(r.skipped.empty(), "A* skipped %zu goals", r.skipped.size());
+  CHECK(r.not_crossed.empty(), "A* path misses %zu gate segments", r.not_crossed.size());
+  CHECK(r.min_clearance_m >= cfg.clearance_m * cfg.clearance_fallback_ratio,
+        "A* path clearance %.3f m below %.3f m", r.min_clearance_m, cfg.clearance_m * cfg.clearance_fallback_ratio);
+  const PlannedPath& p = r.path;
+  CHECK((p.points.front().pos.head<2>() - launch.head<2>()).norm() < 1e-9, "path does not start at the vehicle");
+  CHECK((p.points.back().pos.head<2>() - goals.back().center.head<2>()).norm() < 0.08, "path does not end at the pad");
+  double vmax = 0.0;
+  for (std::size_t i = 1; i < p.points.size(); ++i) {
+    CHECK(p.points[i].t_s > p.points[i - 1].t_s, "time not increasing at %zu", i);
+    vmax = std::max(vmax, p.points[i].vel.norm());
+  }
+  CHECK(p.points.front().vel.norm() < 1e-9 && p.points.back().vel.norm() < 1e-9, "path must start and end at rest");
+  CHECK(vmax <= cfg.cruise_speed_m_s + 1e-9 && vmax > 1.0, "peak speed %.2f", vmax);
+  for (std::size_t i = 1; i < r.goal_s_m.size(); ++i) {
+    CHECK(r.goal_s_m[i] >= r.goal_s_m[i - 1], "goal arc lengths not monotonic at %zu", i);
+  }
+
+  const AStarPlanResult r2 = astar.plan(launch, goals);
+  CHECK(r2.path.points.size() == p.points.size() &&
+            (r2.path.points.back().pos - p.points.back().pos).norm() < 1e-12 &&
+            std::abs(r2.path.total_duration_s - p.total_duration_s) < 1e-12,
+        "A* is not deterministic");
+
+  // Replan from mid-course through the remaining goals, at the current speed.
+  CourseProgress progress;
+  progress.reset(p, r.goal_s_m, 0);
+  const double s_mid = 0.5 * p.total_length_m;
+  for (double s = 0.0; s <= s_mid; s += 0.1) progress.update(p.sampleByArcLength(s).pos);
+  const PathPoint mid = p.sampleByArcLength(s_mid);
+  const std::size_t next = progress.update(mid.pos);
+  const std::vector<PlanGoal> rest(goals.begin() + static_cast<std::ptrdiff_t>(next), goals.end());
+  const AStarPlanResult rr = astar.plan(mid.pos, rest, mid.vel.norm());
+  CHECK(next > 0 && next < goals.size() && rr.ok, "mid-course replan (next=%zu) failed", next);
+  CHECK(rr.path.total_length_m < p.total_length_m - s_mid + 1.5, "replan %.2fm vs %.2fm remaining",
+        rr.path.total_length_m, p.total_length_m - s_mid);
+  CHECK(std::abs(rr.path.points.front().vel.norm() - mid.vel.norm()) < 0.05, "replan does not start at speed");
+
+  // A blocked corridor moves the path.
+  auto gt_blocked = std::make_shared<GroundTruthMap>(*gt);
+  gt_blocked->markCorridorBlocked(p.sampleByArcLength(0.3 * p.total_length_m).pos, 0.15);
+  AStarPlanner astar_b(cfg, gt_blocked);
+  const AStarPlanResult rb = astar_b.plan(launch, goals);
+  CHECK(rb.ok && std::abs(rb.path.total_length_m - p.total_length_m) > 1e-3, "blocked corridor did not change the path");
+
+  std::printf("[PASS] testAStarPlannerCourse (len=%.2fm, %.2fs, min_clr=%.3fm, %zu expansions, replan from goal "
+              "#%zu: %.2fm)\n", p.total_length_m, p.total_duration_s, r.min_clearance_m, r.expanded, next,
+              rr.path.total_length_m);
+}
+
 int main() {
   testGroundTruthMapEncoding();
   testVoxelCostmapAndDisparityPunchThroughFMEA();
   testRRTStarPlannerAndBsplineSmoothing();
   testRRTStarReplanContinuesFromProgress();
+  testAStarPlannerCourse();
   testPathTransformerAndiSAM2ShiftFMEA();
   testMPPI2048RolloutsAndPillarEvasion();
   testMPPICandidateRollouts();

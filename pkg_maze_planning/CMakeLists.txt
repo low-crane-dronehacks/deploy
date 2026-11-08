@@ -19,6 +19,7 @@ add_library(maze_planning_core SHARED
   ${SRC_ROOT}/groundtruth_map.cpp
   ${SRC_ROOT}/voxel_costmap.cpp
   ${SRC_ROOT}/rrt_star_planner.cpp
+  ${SRC_ROOT}/astar_planner.cpp
   ${SRC_ROOT}/path_transformer.cpp
   ${SRC_ROOT}/mppi_controller.cpp
   ${SRC_ROOT}/control_mux.cpp
@@ -59,6 +60,12 @@ if(ament_cmake_FOUND)
     rclcpp tf2_ros sensor_msgs nav_msgs geometry_msgs
   )
 
+  add_executable(astar_planner_node ${SRC_ROOT}/ros/astar_planner_node.cpp)
+  target_link_libraries(astar_planner_node maze_planning_core)
+  ament_target_dependencies(astar_planner_node
+    rclcpp tf2_ros sensor_msgs nav_msgs geometry_msgs
+  )
+
   add_executable(path_transformer_node ${SRC_ROOT}/ros/path_transformer_node.cpp)
   target_link_libraries(path_transformer_node maze_planning_core)
   ament_target_dependencies(path_transformer_node
@@ -91,6 +98,7 @@ if(ament_cmake_FOUND)
   )
   install(TARGETS
     rrt_star_planner_node
+    astar_planner_node
     path_transformer_node
     mppi_controller_node
     sim_loopback_node

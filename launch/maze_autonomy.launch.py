@@ -6,7 +6,8 @@ Decoupled ROS 2 nodes (Section 2.2, 2.3, WP-3, WP-4); each talks to the others o
   - map -> odom alignment: static launch-mark offset (map_odom_source:=static), or published by an
     estimator such as iSAM2 / the merged stack (map_odom_source:=external)
   - isam2_depth_node (isam2:=true; needs GTSAM + px4_msgs): ~/obstacles -> MPPI's local distance grid
-  - rrt_star_planner_node: GroundTruthMap + Informed RRT* -> /plan/global_rrt (latched, on each new plan)
+  - global planner (planner:=astar | rrt_star): astar_planner_node (grid A* through the arena_prior.json
+    checkpoints) or rrt_star_planner_node -> /plan/global_rrt (latched, timed, on each new plan)
   - path_transformer_node: /plan/global_rrt + TF map->odom -> /plan/local_reference (20 Hz),
     /plan/rl_lookaheads (50 Hz)
   - mppi_controller_node: /plan/local_reference + obstacle clouds -> /control/trajectory_setpoint (50 Hz),
@@ -22,6 +23,7 @@ Usage:
   ros2 launch launch/maze_autonomy.launch.py hardware:=sitl isam2:=true arm:=false
 Arming (arm:=true) needs team approval for that specific flight (AGENTS.md).
 """
+import json
 import os
 
 from launch import LaunchDescription
@@ -57,6 +59,27 @@ PROFILES = {
 # launch from the launch mark, map_ned -> odom_ned is this translation (and the heading offset, which is 0
 # when PX4 has a true-north heading as in SITL).
 LAUNCH_MARK_NED = (0.9144, -2.5146, 0.0)
+
+
+def _course_goals(prior_json, prefer_window):
+    """arena_prior.json checkpoints in order, one gate per checkpoint (the window or Gate B for the shared
+    one, +5 for the window), then the pad: astar_planner_node's flat `goals` (9 doubles each) + names."""
+    with open(prior_json) as f:
+        meta = json.load(f)
+    by_cp = {}
+    for g in sorted(meta["gates"], key=lambda g: g["index"]):
+        by_cp.setdefault(g["checkpoint"], []).append(g)
+    flat, names = [], []
+    for cp in sorted(by_cp):
+        options = by_cp[cp]
+        pick = next((g for g in options if g["is_window"] == prefer_window), options[0])
+        c = pick["center_ned"]
+        flat += [c[0], c[1], c[2], *pick["A_ned"], *pick["B_ned"], *pick["normal_ned"]]
+        names.append(pick["name"])
+    pad = meta["landmarks"]["pad_center_ned"]
+    flat += [pad[0], pad[1], -0.8, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    names.append("pad")
+    return flat, names, meta["arena"]
 
 
 def _static_tf(parent, child, xyz=(0.0, 0.0, 0.0), yaw=0.0, sim_time="false"):
@@ -161,24 +184,42 @@ def _setup(context):
                "-p", f"world_frame:={ISAM2_WORLD_FRAME}"],
             cwd=ROOT, output="screen"))
 
-    # 1. RRT* Global Planner Node (/plan/global_rrt, latched + /viz/groundtruth_map_cloud)
-    actions.append(
-        ExecuteProcess(
-            cmd=_node_cmd("pkg_maze_planning", "rrt_star_planner_node")
-            + [
-                "--ros-args",
-                "-p",
-                f"use_sim_time:={sim_time_str}",
-                "-p",
-                f"groundtruth_map_path:={gt_map_path}",
-                "-p",
-                f"cruise_speed_m_s:={cruise_speed}",
-            ]
+    # 1. Global planner (/plan/global_rrt, latched + /viz/groundtruth_map_cloud): A* (default) or RRT*.
+    planner = LaunchConfiguration("planner").perform(context)
+    if planner not in ("astar", "rrt_star"):
+        raise RuntimeError(f"planner must be astar | rrt_star, got {planner!r}")
+    if planner == "astar":
+        prefer_window = LaunchConfiguration("prefer_window").perform(context).lower() == "true"
+        flat, names, arena = _course_goals(os.path.join(ROOT, "config", "arena_prior.json"), prefer_window)
+        actions.append(ExecuteProcess(
+            cmd=_node_cmd("pkg_maze_planning", "astar_planner_node")
+            + ["--ros-args", "-p", f"use_sim_time:={sim_time_str}",
+               "-p", f"groundtruth_map_path:={gt_map_path}",
+               "-p", f"cruise_speed_m_s:={cruise_speed}",
+               "-p", f"arena_half_m:={arena['arena_half_m']}",
+               "-p", f"cp_margin_m:={arena['cp_margin_m']}",
+               "-p", "goals:=[" + ",".join(f"{v:.6f}" for v in flat) + "]",
+               "-p", "goal_names:=[" + ",".join(f"'{n}'" for n in names) + "]"]
             + frames,
-            cwd=ROOT,
-            output="screen",
+            cwd=ROOT, output="screen"))
+    if planner == "rrt_star":
+        actions.append(
+            ExecuteProcess(
+                cmd=_node_cmd("pkg_maze_planning", "rrt_star_planner_node")
+                + [
+                    "--ros-args",
+                    "-p",
+                    f"use_sim_time:={sim_time_str}",
+                    "-p",
+                    f"groundtruth_map_path:={gt_map_path}",
+                    "-p",
+                    f"cruise_speed_m_s:={cruise_speed}",
+                ]
+                + frames,
+                cwd=ROOT,
+                output="screen",
+            )
         )
-    )
 
     # 2. Path Transformer Node (map -> odom -> /plan/local_reference @ 20 Hz & /plan/rl_lookaheads @ 50 Hz)
     actions.append(
@@ -265,6 +306,9 @@ def generate_launch_description():
             DeclareLaunchArgument("sim_loopback", default_value="false", description="true = standalone closed-loop RViz demo without Gazebo"),
             DeclareLaunchArgument("inject_demo_pillar", default_value="false", description="true = inject unmodeled vertical pole at [1.75, -2.51] for MPPI evasion demo"),
             DeclareLaunchArgument("rviz", default_value="false", description="true = launch rviz2 with config/maze_rviz.rviz"),
+            DeclareLaunchArgument("planner", default_value="astar", description="astar | rrt_star (global planner)"),
+            DeclareLaunchArgument("prefer_window", default_value="true",
+                                  description="true = window for the shared checkpoint (+5), false = Gate B"),
             DeclareLaunchArgument("isam2", default_value="false", description="true = run isam2_depth_node and feed its obstacles to MPPI"),
             DeclareLaunchArgument("map_odom_source", default_value="static",
                                   description="static = launch-mark offset TF map_ned -> odom_ned; "
