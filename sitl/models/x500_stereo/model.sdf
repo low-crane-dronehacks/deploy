@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  x500_stereo: PX4's x500_depth (X500 quad + forward OAK-D Lite depth camera, kept for the policy / iSAM2) plus an
+  OAK-D S2-like stereo pair and IMU for cuVSLAM (onboard/slam/cuvslam_lib_node.py, docs/CUVSLAM_LOCAL.md):
+    - two mono cameras, 640x400 L8 (mono8), horizontal FOV 74.7 deg (fx = 320 / tan(37.35 deg) = 419), 30 Hz,
+      7.5 cm apart on one rigid link, both rendered in the same sensor update (same stamp, as the node pairs them)
+    - IMU 200 Hz on the same link, white noise at onboard/config/vio.yaml's densities (sigma = density * sqrt(200))
+  Explicit topics so nothing collides with what PX4's gz_bridge reads (base_link imu_sensor etc.):
+    /stereo/left/image_gz, /stereo/right/image_gz (+ .../camera_info), /stereo/imu_gz -> bridged by run_native.sh.
+  Stereo link pose in base_link (FLU): (0.13, 0, 0.20); left eye y = +0.0375, right eye y = -0.0375.
+  run_native.sh publishes the matching static TF base_link -> oak_left / oak_right (optical) / oak_imu.
+-->
+<sdf version="1.9">
+  <model name="x500_stereo">
+    <include merge="true">
+      <uri>x500_depth</uri>
+    </include>
+    <link name="stereo_link">
+      <pose relative_to="base_link">0.13 0 0.20 0 0 0</pose>
+      <inertial>
+        <mass>0.03</mass>
+        <inertia><ixx>1e-5</ixx><iyy>1e-5</iyy><izz>1e-5</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
+      </inertial>
+      <sensor name="stereo_left" type="camera">
+        <pose>0 0.0375 0 0 0 0</pose>
+        <camera>
+          <horizontal_fov>1.3038</horizontal_fov>
+          <image><width>640</width><height>400</height><format>L8</format></image>
+          <clip><near>0.1</near><far>40</far></clip>
+        </camera>
+        <always_on>1</always_on>
+        <update_rate>30</update_rate>
+        <topic>/stereo/left/image_gz</topic>
+      </sensor>
+      <sensor name="stereo_right" type="camera">
+        <pose>0 -0.0375 0 0 0 0</pose>
+        <camera>
+          <horizontal_fov>1.3038</horizontal_fov>
+          <image><width>640</width><height>400</height><format>L8</format></image>
+          <clip><near>0.1</near><far>40</far></clip>
+        </camera>
+        <always_on>1</always_on>
+        <update_rate>30</update_rate>
+        <topic>/stereo/right/image_gz</topic>
+      </sensor>
+      <sensor name="stereo_imu" type="imu">
+        <always_on>1</always_on>
+        <update_rate>200</update_rate>
+        <topic>/stereo/imu_gz</topic>
+        <imu>
+          <angular_velocity>
+            <x><noise type="gaussian"><mean>0</mean><stddev>0.0345</stddev></noise></x>
+            <y><noise type="gaussian"><mean>0</mean><stddev>0.0345</stddev></noise></y>
+            <z><noise type="gaussian"><mean>0</mean><stddev>0.0345</stddev></noise></z>
+          </angular_velocity>
+          <linear_acceleration>
+            <x><noise type="gaussian"><mean>0</mean><stddev>0.263</stddev></noise></x>
+            <y><noise type="gaussian"><mean>0</mean><stddev>0.263</stddev></noise></y>
+            <z><noise type="gaussian"><mean>0</mean><stddev>0.263</stddev></noise></z>
+          </linear_acceleration>
+        </imu>
+      </sensor>
+    </link>
+    <joint name="stereo_joint" type="fixed">
+      <parent>base_link</parent>
+      <child>stereo_link</child>
+    </joint>
+  </model>
+</sdf>
