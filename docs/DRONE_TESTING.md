@@ -143,7 +143,8 @@ Pilot procedure:
 - The pilot lands it.
 - `forward_m` follows the current heading, so face the drone at open space and avoid turning during the test.
 
-Record a bag of every flight in a second terminal: `cd ~/skybeta && host/run.sh bag`.
+Record every flight in a second terminal before arming; see [Flight recording](#flight-recording) below.
+The organizer wrapper is also available: `cd ~/skybeta && host/run.sh bag`.
 
 Afterwards, restore the normal competitor window: `docker rm -f skybeta-stack`. Keep the drone still while it
 restarts.
@@ -184,6 +185,53 @@ Python/C++ parity, not ROS topic delivery or actual VPI output. The stack advanc
 the [training review](https://github.com/low-crane-dronehacks/deploy/pull/1#issuecomment-6719561536)
 reports that training also takes the latest delayed frame at each policy tick. Camera-rate stacking
 is not an established requirement; do not change it without checking the training implementation.
+
+### Flight recording
+
+Start this in a **second terminal on the drone**, before the approved flight. Keep it running through
+landing and disarm. It records PX4 feedback, commanded motion, policy status/depth, VIO and transforms.
+It does not arm or send flight commands.
+
+```bash
+# On the drone host: enter a separate shell in the running stack.
+cd ~/skybeta && host/run.sh shell
+
+# Inside that shell:
+source /opt/ros/humble/setup.bash
+source /root/skybeta_ws/install/setup.bash
+source /root/team_ws/install/setup.bash
+export ROS_DOMAIN_ID=25
+mkdir -p /root/team_ws/logs/bags
+FLIGHT_BAG="/root/team_ws/logs/bags/flight_$(date -u +%Y%m%dT%H%M%SZ)"
+ros2 bag record -o "$FLIGHT_BAG" \
+  /fmu/out/vehicle_local_position \
+  /fmu/out/vehicle_attitude \
+  /fmu/out/vehicle_status \
+  /fmu/out/vehicle_land_detected \
+  /skybeta/state /skybeta/setpoint/twist \
+  /policynav/status /policynav/depth/image /policynav/depth/camera_info \
+  /visual_slam/tracking/odometry /visual_slam/status \
+  /tf /tf_static
+```
+
+Wait for the recorder to subscribe to the expected live topics before arming. The names above target
+PX4 1.16; check `ros2 topic list` if a topic is missing. The scripted forward flight does not itself
+start policy/depth publishers, so those topics may be absent for that test.
+
+After landing, press **Ctrl-C once** in the recording terminal and wait for the recorder to exit so it
+finishes writing the bag. Then, in the same shell:
+
+```bash
+ros2 bag info "$FLIGHT_BAG"
+```
+
+Check the listed topics and message counts. The bag directory contains `metadata.yaml` and the storage
+file(s). It persists on the drone host at `~/team_ws/logs/bags/flight_<UTC timestamp>/` through the
+workspace mount; stop recording before restarting/removing the stack container.
+
+For a stereo-debugging **bench** recording, append `/oak/left/image_mono /oak/right/image_mono
+/oak/left/camera_info /oak/right/camera_info` to the record command. Raw stereo adds substantial data;
+check recorder load and available storage before including it in a flight recording.
 
 ## 7. Watching it live: Foxglove on your laptop
 
