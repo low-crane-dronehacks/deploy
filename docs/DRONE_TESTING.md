@@ -143,10 +143,12 @@ drone's local DDS domain, so `drone.env` does not change and the stack does not 
 docker run --rm --network host --ipc host -e ROS_DOMAIN_ID=17 -e RMW_IMPLEMENTATION=rmw_fastrtps_cpp \
   -v ~/skybeta/host/dds/fastdds_localhost.xml:/etc/skybeta/fastdds.xml:ro \
   -e FASTRTPS_DEFAULT_PROFILES_FILE=/etc/skybeta/fastdds.xml -e FASTDDS_DEFAULT_PROFILES_FILE=/etc/skybeta/fastdds.xml \
-  skybeta:0.3.2 bash -c "source /opt/ros/humble/setup.bash; ros2 launch foxglove_bridge foxglove_bridge_launch.xml \
-    port:=8766 capabilities:='[connectionGraph]'"
+  skybeta:0.3.2 bash -c "source /opt/ros/humble/setup.bash; source /root/skybeta_ws/install/setup.bash; \
+    ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8766 capabilities:='[connectionGraph]'"
 ```
 
+- **Source `/root/skybeta_ws/install` too.** That is where `px4_msgs` lives; without it the bridge reports
+  `px4_msgs` not found and cannot decode the `/fmu/*` topics.
 - **Port 8766, not Foxglove's default 8765.** 8765 is taken on the Tailscale address by the organizers' status
   agent (`/opt/skybeta-status`), which we must not disturb.
 - **`capabilities:='[connectionGraph]'` makes it view-only.** The laptop cannot publish topics, set parameters or
