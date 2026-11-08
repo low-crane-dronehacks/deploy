@@ -7,9 +7,6 @@
 #include <vector>
 
 #include "isam2_depth/distance_grid.hpp"
-#ifdef HAVE_GTSAM
-#include "isam2_depth/mppi_interface.hpp"
-#endif
 #include "maze_planning/groundtruth_map.hpp"
 #include "maze_planning/types.hpp"
 #include "maze_planning/voxel_costmap.hpp"
@@ -70,9 +67,31 @@ struct MPPIConfig {
   double w_control_rate{1.4};       // ControlRateCritic: control slew-rate smoothness
 
   double safe_distance_m{0.42};     // obstacle comfort inflation radius (m)
+  // Never ask for more comfort than the reference itself has: per horizon step the comfort radius is
+  // clamp(clearance at the reference point, lethal + adaptive_margin, safe_distance). Without it MPPI refuses a
+  // planned pass that is legitimately tight (corridor_end needs ~0.24 m to clear its checkpoint) and stalls.
+  bool adaptive_safe_distance{true};
+  double adaptive_safe_margin_m{0.02};
   double lethal_distance_m{0.21};   // hard collision radius (m)
   double drone_radius_m{0.21};      // physical collision radius for FMEA Pillar Dead-Center check
   double stall_cost_threshold{850.0};
+
+  // Visualization: keep this many sampled rollouts (evenly strided over the K samples) per cycle so a node
+  // can publish them. 0 = keep none (no extra cost in the rollout loop).
+  int viz_num_candidates{0};
+};
+
+/**
+ * @brief Sampled MPPI rollouts kept for visualization: num_candidates trajectories of horizon_steps + 1
+ * positions each (odom frame, x0 first), with their total rollout cost.
+ */
+struct MPPICandidateSet {
+  int num_candidates{0};
+  int points_per_candidate{0};
+  std::vector<Eigen::Vector3d> positions;  // candidate-major: positions[c * points_per_candidate + t]
+  std::vector<double> costs;               // costs[c]
+  double min_cost{0.0};
+  double max_cost{0.0};
 };
 
 /**
@@ -86,13 +105,11 @@ struct MPPIConfig {
  *   - FMEA Pillar Dead-Center handling (Section 6): splits rollout distribution left/right around
  *     unmodeled support beams, or triggers OBSTACLE_HOLD + global RRT* replan if both sides are narrower
  *     than drone_radius_m
- *   - Direct in-process integration with isam2_depth::MppiStateSink (`onEstimate(const MppiInput&)`)
+ *   - Optional local distance field from an estimator (odom frame), e.g. iSAM2's DistanceGrid, through
+ *     onEstimatorUpdate() / setLocalDistanceGrid(). No GTSAM dependency here: the in-process iSAM2 hook is
+ *     isam2_depth/mppi_sink_adapter.hpp.
  */
-class MPPIController
-#ifdef HAVE_GTSAM
-    : public isam2_depth::MppiStateSink
-#endif
-{
+class MPPIController {
  public:
   explicit MPPIController(const MPPIConfig& cfg = MPPIConfig{},
                           const MultirotorPlantParams& plant = MultirotorPlantParams{},
@@ -100,13 +117,6 @@ class MPPIController
 
   void setCostmap(std::shared_ptr<const VoxelCostmap> costmap) { costmap_ = std::move(costmap); }
   void setOdomToMapTransform(const SE3Transform& T_map_odom) { T_map_odom_ = T_map_odom; }
-
-#ifdef HAVE_GTSAM
-  /**
-   * @brief Zero-copy in-process hook called by isam2_depth::Isam2DepthNode at the PX4 rate.
-   */
-  void onEstimate(const isam2_depth::MppiInput& in) override;
-#endif
 
   /**
    * @brief Update in-process state and DistanceGrid from estimator (usable with or without GTSAM).
@@ -116,6 +126,11 @@ class MPPIController
                          const Eigen::Quaterniond& q_ned_frd,
                          const Eigen::Vector3d& vel_ned,
                          std::shared_ptr<const isam2_depth::DistanceGrid> distance_grid);
+
+  /**
+   * @brief Replace only the local distance field (odom frame); nullptr disables it. Thread-safe.
+   */
+  void setLocalDistanceGrid(std::shared_ptr<const isam2_depth::DistanceGrid> distance_grid);
 
   /**
    * @brief Execute one 50 Hz MPPI optimization cycle (2048 rollouts over T=16 horizon steps)
@@ -129,6 +144,7 @@ class MPPIController
   const MPPIConfig& config() const { return cfg_; }
   const std::vector<MPPIControl>& meanControlSequence() const { return u_mean_; }
   const std::vector<Eigen::Vector3d>& lastOptimalRollout() const { return optimal_rollout_pos_; }
+  const MPPICandidateSet& lastCandidates() const { return candidates_; }
   double lastSolveTimeMs() const { return last_solve_ms_; }
   double lastMinCost() const { return last_min_cost_; }
 
@@ -147,7 +163,8 @@ class MPPIController
   MPPIConfig cfg_;
   MultirotorPlantParams plant_;
   std::shared_ptr<const VoxelCostmap> costmap_;
-  std::shared_ptr<const isam2_depth::DistanceGrid> isam2_grid_;
+  std::shared_ptr<const isam2_depth::DistanceGrid> isam2_grid_;    // written by the estimator (under est_mutex_)
+  std::shared_ptr<const isam2_depth::DistanceGrid> active_grid_;   // snapshot used for one computeCommand()
   SE3Transform T_map_odom_{};
 
   std::vector<MPPIControl> u_mean_;
@@ -155,7 +172,9 @@ class MPPIController
   std::vector<double> costs_;
   std::vector<double> weights_;
   std::vector<PathPoint> horizon_refs_;
+  std::vector<double> horizon_safe_;   // comfort radius per horizon step (adaptive_safe_distance)
   std::vector<Eigen::Vector3d> optimal_rollout_pos_;
+  MPPICandidateSet candidates_;
   double last_solve_ms_{0.0};
   double last_min_cost_{0.0};
   int consecutive_stall_ticks_{0};

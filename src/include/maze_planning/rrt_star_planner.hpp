@@ -62,6 +62,9 @@ class RRTStarPlanner {
   /**
    * @brief Plan a collision-free, clearance-optimized path between start_map and goal_map
    * on the GroundTruthMap encoding, smoothed with a clamped cubic B-spline (/plan/global_rrt).
+   *
+   * Returns false when the tree never connected to goal_map. out_path / out_raw_waypoints then hold the
+   * best partial path (towards the node closest to the goal) for debugging only: do not fly it.
    */
   bool plan(const Eigen::Vector3d& start_map,
             const Eigen::Vector3d& goal_map,
@@ -72,20 +75,36 @@ class RRTStarPlanner {
   /**
    * @brief Plan a complete multi-gate maze trajectory from start_map through a sequence of
    * anchor/gate waypoints to the finish pad in the map frame.
+   *
+   * Every leg must reach its anchor: if a leg fails (after one retry with more iterations) the whole
+   * plan fails and out_path is left untouched, instead of silently skipping a gate.
+   * out_anchor_s_m (optional) receives each anchor's arc length along out_path, in anchor order.
    */
   bool planMultiWaypoint(const Eigen::Vector3d& start_map,
                          const std::vector<Eigen::Vector3d>& anchor_waypoints_map,
                          PlannedPath& out_path,
-                         std::vector<Eigen::Vector3d>* out_waypoints = nullptr);
+                         std::vector<Eigen::Vector3d>* out_waypoints = nullptr,
+                         std::vector<double>* out_anchor_s_m = nullptr);
+
+  /**
+   * @brief Ordered course anchors (gate centres and corridor turn points), launch -> pad, in the map frame.
+   * Course knowledge lives here so a node can track which anchors it has already passed.
+   */
+  std::vector<Eigen::Vector3d> courseAnchors(bool prefer_window, bool include_return_leg) const;
 
   /**
    * @brief Plan the full DroneHacks 2026 maze course (Launch -> Gate 0 -> Gate 1 -> Gate 2 ->
    * Gate 3 -> Gate 4 Window -> Pad) using GroundTruthMap.
+   *
+   * first_anchor_idx skips anchors already passed, so a replan from mid-course goes start -> remaining
+   * anchors -> pad instead of looping back through the whole course.
    */
   bool planFullCourse(const Eigen::Vector3d& start_map,
                       bool prefer_window,
                       bool include_return_leg,
-                      PlannedPath& out_path);
+                      PlannedPath& out_path,
+                      std::size_t first_anchor_idx = 0,
+                      std::vector<double>* out_anchor_s_m = nullptr);
 
   /**
    * @brief FMEA Pillar Dead-Center Recovery (Section 6):

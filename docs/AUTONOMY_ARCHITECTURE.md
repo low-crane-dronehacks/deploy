@@ -63,7 +63,7 @@ flowchart TD
 | **Mission Manager** | [`ego_planner/include/ego_planner/mission_manager.hpp`](file:///home/ejkaba/prj/deploy/ego_planner/include/ego_planner/mission_manager.hpp), `src/mission_manager.cpp` | State machine (`WAIT` $\to$ `ARM` $\to$ `FLY` $\to$ `LAND` $\to$ `DONE`), gate sequence tracking, and CBF barriers. |
 | **ROS 2 Flight Node** | [`ego_planner/src/ego_planner_node.cpp`](file:///home/ejkaba/prj/deploy/ego_planner/src/ego_planner_node.cpp) | PX4 uORB offboard streaming, camera depth subscription, and coordinate transforms (FLU $\leftrightarrow$ NED). |
 | **Launch Infrastructure** | [`launch/ego_planner.launch.py`](file:///home/ejkaba/prj/deploy/launch/ego_planner.launch.py) (aliased to `launch/autonomy.launch.py`) | Modular launch configuration with parameters for hardware, planner, and controller. |
-| **iSAM2 depth graph** | [`src/`](../src/), [`docs/ISAM2.md`](ISAM2.md) | C++ keyframe graph (GTSAM iSAM2): depth ICP + PX4 estimate -> corrected pose + distance grid for the planner / MPPI (`MppiStateSink`). Planning only: never fed back into PX4. |
+| **iSAM2 depth graph** | [`src/`](../src/), [`docs/ISAM2.md`](ISAM2.md) | C++ keyframe graph (GTSAM iSAM2): depth ICP + PX4 estimate -> corrected pose + distance grid for the planner / MPPI (`~/obstacles` topic, or `MppiControllerSink` in-process). Planning only: never fed back into PX4. |
 
 ---
 
@@ -122,7 +122,8 @@ test results. It is **planning-only**: PX4 keeps flying on cuVSLAM through `ev_b
 PX4's estimate with depth for the planner and MPPI. Do not publish its output to `/visual_slam/tracking/odometry` or
 anything else PX4 fuses: it consumes PX4's estimate, so that would be a feedback loop.
 
-Next steps: register depth against `config/arena_prior.bin` (prior-map factors, robust: the as-built arena
+Its distance field reaches the maze MPPI today through `~/obstacles` (section 7). Next steps: publish a
+`map_ned -> odom_ned` correction (section 7, "Map alignment"), register depth against `config/arena_prior.bin` (prior-map factors, robust: the as-built arena
 differs), and connect its `MppiInput` / `DistanceGrid` to `MPPIController` / `GridMap`.
 
 ---
@@ -174,3 +175,72 @@ Output: `9 passed in 0.34s`.
 cd /home/ejkaba/prj/deploy
 sbatch /scratch/ejkaba/sitl/run_sitl_ego_test.sbatch
 ```
+
+---
+
+## 7. Maze stack contracts (`src/`, `launch/maze_autonomy.launch.py`)
+
+Every node talks to the others only through these topics and TF, so any one of them can be replaced (by the
+merged trajectory planner, by an estimator) without touching the others.
+
+### Frames (all NED / FRD, like PX4)
+
+| Frame | Meaning | Published by |
+| :--- | :--- | :--- |
+| `map_ned` | Arena / prior map (GroundTruthMap, gates, pad). Launch mark at (0.9144, -2.5146). | root |
+| `odom_ned` | PX4's local frame (origin where PX4 booted), continuous, never jumps | child of `map_ned` |
+| `base_link_frd` | Vehicle body | `px4_local_odom_ned.py` (or `sim_loopback_node`) |
+| `isam2_world_ned` | iSAM2's world = PX4's local frame | static identity under `odom_ned` |
+
+These names are deliberately not ROS's ENU `odom` / `base_link`, which `onboard/adapters/px4_odom.py` already
+publishes from the same estimate. Two publishers of one TF edge in two conventions breaks both.
+
+**Map alignment (`map_ned -> odom_ned`).** With `map_odom_source:=static` (default) the launch file publishes
+the launch-mark offset (and `map_odom_yaw`) as a static TF: correct when the vehicle boots on the launch mark
+with a true-north heading (SITL). An estimator that knows better (iSAM2 registered against the prior map, or
+the merged stack) publishes this edge itself; launch with `map_odom_source:=external`. Exactly one publisher.
+Every node warns (throttled) and falls back to identity when the edge is missing; identity is ~2.7 m wrong on
+this course, so treat that warning as a failure.
+
+### Topics
+
+| Topic | Type | Frame | Producer -> consumer |
+| :--- | :--- | :--- | :--- |
+| `/odometry/local` | `nav_msgs/Odometry` (twist in body FRD) | `odom_ned` | `px4_local_odom_ned.py` / `sim_loopback_node` -> all |
+| `/plan/global_rrt` | `nav_msgs/Path`, **latched** (reliable, transient_local) | `map_ned` | global planner -> `path_transformer_node` |
+| `/plan/local_reference` | `nav_msgs/Path` (timed, see below) | `odom_ned` | `path_transformer_node` -> MPPI |
+| `/plan/replan_blocked_corridor` | `geometry_msgs/PointStamped` | `map_ned` | MPPI -> global planner |
+| `/oak/points/clamped` | `sensor_msgs/PointCloud2` | any, via TF | depth filter -> MPPI costmap (ray-cleared from the cloud frame's origin) |
+| `/isam2_depth_node/obstacles` | `sensor_msgs/PointCloud2` | `isam2_world_ned` | iSAM2 -> MPPI local distance grid (`isam2:=true`) |
+| `/control/trajectory_setpoint` | `px4_msgs/TrajectorySetpoint` | NED | MPPI -> `control_mux_node` |
+| `/control/cmd_vel` | `geometry_msgs/TwistStamped` | `odom_ned` | MPPI -> `sim_loopback_node` only (debug); the mux ignores it |
+| `/viz/mppi_candidates` | `visualization_msgs/MarkerArray` | `odom_ned` | MPPI -> RViz |
+
+### Global planner contract (how to swap RRT* for the merged planner)
+
+Replace `rrt_star_planner_node` with any node that:
+1. publishes `nav_msgs/Path` on `/plan/global_rrt` in `map_ned`, latched, **only when the plan changes**. A new
+   message means "new plan, starting at the vehicle": `path_transformer_node` restarts progress at s = 0. The same
+   path sent again keeps progress, but do not rely on it.
+2. puts the timing in the pose stamps: `poses[i].header.stamp = header.stamp + t_i`. Velocities are derived from
+   them, so a trajectory optimizer's speed profile reaches MPPI unchanged. A path with equal stamps is timed at
+   `cruise_speed_m_s` instead.
+3. goes from the current pose to the goal through the gates **not yet passed** when it replans. RRT* does this
+   with `CourseProgress` (`include/maze_planning/course_progress.hpp`), which any planner that knows where its
+   anchors sit along its path can reuse.
+4. handles `/plan/replan_blocked_corridor` (optional: without it a dead-centre pillar only produces a hold).
+
+Nothing downstream (transformer, MPPI, mux, RL lookaheads) changes.
+
+### MPPI visualization
+
+`/viz/mppi_candidates` holds `viz_num_candidates` (default 64; 0 = off) of the sampled rollouts, evenly strided
+over the K samples (namespace `mppi_candidates`, coloured green -> red by log cost), and the optimal rollout
+(namespace `mppi_optimal`, blue). It is published every `viz_candidates_every_n` control ticks (default 5 =
+10 Hz) and only while something subscribes. Markers expire after 0.5 s.
+
+### Standalone demo
+
+`sim_loopback:=true` runs `sim_loopback_node` (a first-order velocity plant) in place of PX4 and the odometry
+adapter. It owns `/odometry/local` and TF; never run it next to SITL or the drone (the launch file refuses
+`arm:=true` with it).

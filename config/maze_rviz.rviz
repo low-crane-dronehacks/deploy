@@ -37,7 +37,7 @@ Visualization Manager:
       Style: Boxes
       Topic:
         Depth: 5
-        Durability Policy: Volatile
+        Durability Policy: Transient Local
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /viz/groundtruth_map_cloud
@@ -63,7 +63,7 @@ Visualization Manager:
       Name: Global Informed RRT* Path (/plan/global_rrt)
       Topic:
         Depth: 5
-        Durability Policy: Volatile
+        Durability Policy: Transient Local
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /plan/global_rrt
@@ -81,42 +81,47 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /plan/local_reference
-    - Alpha: 1
-      Buffer Length: 1
-      Class: rviz_default_plugins/Path
-      Color: 255; 82; 82
+    - Class: rviz_default_plugins/MarkerArray
       Enabled: true
-      Line Style: Billboards
-      Line Width: 0.055
-      Name: MPPI 2048-Rollout Optimal Horizon (/plan/mppi_rollout)
+      Name: MPPI Candidate Rollouts (/viz/mppi_candidates)
+      Namespaces:
+        mppi_candidates: true
+        mppi_optimal: true
       Topic:
         Depth: 5
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /plan/mppi_rollout
-    - Alpha: 1
-      Axes Length: 0.35
-      Axes Radius: 0.03
-      Class: rviz_default_plugins/Pose
-      Color: 255; 215; 0
+        Value: /viz/mppi_candidates
+    - Angle Tolerance: 0.1
+      Class: rviz_default_plugins/Odometry
+      Covariance:
+        Value: false
       Enabled: true
-      Head Length: 0.12
-      Head Radius: 0.06
-      Name: Quadrotor Pose (/viz/drone_pose)
-      Shaft Length: 0.25
-      Shaft Radius: 0.03
-      Shape: Arrow
+      Keep: 1
+      Name: Quadrotor Odometry (/odometry/local)
+      Position Tolerance: 0.1
+      Shape:
+        Alpha: 1
+        Axes Length: 0.35
+        Axes Radius: 0.03
+        Color: 255; 215; 0
+        Head Length: 0.12
+        Head Radius: 0.06
+        Shaft Length: 0.25
+        Shaft Radius: 0.03
+        Value: Arrow
       Topic:
         Depth: 5
         Durability Policy: Volatile
+        Filter size: 10
         History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /viz/drone_pose
+        Reliability Policy: Best Effort
+        Value: /odometry/local
   Enabled: true
   Global Options:
     Background Color: 28; 32; 38
-    Fixed Frame: map
+    Fixed Frame: map_ned
     Frame Rate: 30
   Name: root
   Tools:

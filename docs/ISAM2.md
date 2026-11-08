@@ -53,8 +53,15 @@ src/ros/isam2_depth_node.cpp   ROS 2 node (built only when px4_msgs is found)
 src/test/                  synthetic test: ray-cast depth in a 6 x 6 x 3 m room with pillars
 ```
 
-**MPPI hook:** implement `MppiStateSink::onEstimate(const MppiInput&)` and call `node->setSink(...)` (same
-process). Each `MppiInput` carries:
+**MPPI hook, across processes (what `launch/maze_autonomy.launch.py isam2:=true` does):** `mppi_controller_node`
+subscribes to `~/obstacles` (occupied voxel centres, frame `isam2_world_ned`), rebuilds the same `DistanceGrid`
+around the vehicle and samples it alongside the voxel costmap. The launch file publishes the static TF
+`odom_ned -> isam2_world_ned` (identity: the graph is anchored at PX4's estimate, so its world is PX4's local
+frame). The grid is dropped if no cloud arrives for 1 s.
+
+**MPPI hook, same process:** `isam2_depth::MppiControllerSink` (`include/isam2_depth/mppi_sink_adapter.hpp`)
+implements `MppiStateSink::onEstimate(const MppiInput&)` for `maze_planning::MPPIController`; pass it to
+`node->setSink(...)`. The MPPI core itself does not depend on GTSAM. Each `MppiInput` carries:
 - the pose, velocity and covariance;
 - a `shared_ptr<const DistanceGrid>`, which is immutable, so the MPPI thread can keep sampling the previous one;
 - landmark estimates.
@@ -160,4 +167,4 @@ Worst keyframe update: about 31 ms, of which ICP is about 18 ms, iSAM2 about 1.4
   `extra_links` and `IcpParams::point_step` are the knobs.
 - No free-space carving: a voxel stays occupied once it has `grid_min_hits` points. Stereo speckle that repeats
   across keyframes, and anything that moves, persist.
-- Not in `launch/policynav.launch.py` yet (there is no MPPI to pair it with).
+- Not in `launch/policynav.launch.py`; `launch/maze_autonomy.launch.py isam2:=true` runs it with the MPPI.
