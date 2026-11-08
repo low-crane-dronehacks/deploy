@@ -168,3 +168,32 @@ def test_green_readiness_requires_all_startup_inputs(node, missing):
     if green:
         assert green[0].endswith('\033[0m')
     assert not node.steps
+
+
+def test_ftw0_policy_uses_training_velocity_scale_in_real_step(node):
+    from policynav.policy_np import NumpyPolicy
+    policy = NumpyPolicy(Path(__file__).parents[1] / 'policies/ftw0_s330_1627.npz')
+    node.meta = policy.meta
+    node.feedback.vel = np.array([1.2, .3, -.3])
+    node.feedback.q = np.array([1., 0., 0., 0.])
+    node.airborne = False
+    node.stack = O.FrameStack(node.meta['frame_stack'])
+    node.depth_img = np.ones((80, 128), np.float32)
+    node.prev_action = np.zeros(4, np.float32)
+    seen = []
+    def run_policy(depth, proprio):
+        seen.append(proprio.copy())
+        return policy(depth, proprio)
+    node.policy = run_policy
+    node.v_max, node.yaw_max = node.meta['v_max'], node.meta['yaw_rate_max']
+    node.speed_cap, node.yaw_cap, node.timing = 1.45, 1., []
+    type(node)._step(node, 10.1)
+    assert seen[0][:3] == pytest.approx([.24, .10, -.15])
+    assert node.meta['v_max'] == [1.2, .6, .6]
+    assert np.isfinite(node.prev_action).all()
+    assert np.max(np.abs(node.prev_action)) <= 1.
+    # Identity attitude: ENU x=east/right, y=north/forward, z=up.
+    assert node.cmd[0] == pytest.approx([node.prev_action[1] * .6,
+                                        node.prev_action[0] * 1.2,
+                                        -node.prev_action[2] * .6])
+    assert node.cmd[1] == pytest.approx(-node.prev_action[3])

@@ -8,10 +8,9 @@ here as NumPy `.npz` files (no torch needed on the drone). The policy sees only 
 (velocity, attitude, downward range); it gets no position or map input.
 
 **Default policies on this branch:** `launch/skybeta.launch.py` (the real drone) uses
-`policies/c5_s164_1575.npz`; `launch/policynav.launch.py` uses `policies/cur4_clean50_800.npz`. Any export can
+`policies/ftw0_s330_1627.npz`; `launch/policynav.launch.py` uses `policies/cur4_clean50_800.npz`. Any export can
 be selected with `policy:=policies/<name>.npz`; [docs/POLICIES.md](docs/POLICIES.md) lists them all and the
-observation/action contract. The branch `policy/holes-v5h3-s196` makes `policies/holes_v5h3_s196_3255.npz`
-the drone default.
+observation/action contract. The ftw0 policy supersedes the earlier holes-v5h3-s196 candidate.
 
 ```
 policynav/   policy node: depth + PX4 state -> Offboard velocity setpoints; mission/safety logic (mission.py)

@@ -99,7 +99,7 @@ See [docs/POLICIES.md](docs/POLICIES.md) for exports and [docs/HARDWARE.md](docs
 ## Skybeta: actual drone execution
 
 `launch/skybeta.launch.py` starts the organizer `flight_interface`, our stereo backend and
-`skybeta_policy`. Its current default export is `policies/c5_s164_1575.npz` (v5), with VPI stereo.
+`skybeta_policy`. Its current default export is `policies/ftw0_s330_1627.npz`, with VPI stereo.
 Policy decisions/twists run at 10 Hz; the launch's interface stream rate is separately configured.
 Do not blindly apply the portable stack's 20 Hz stream convention to this path.
 
