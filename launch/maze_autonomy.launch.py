@@ -27,7 +27,7 @@ import json
 import os
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, LogInfo, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, LogInfo, OpaqueFunction, TimerAction
 from launch.substitutions import LaunchConfiguration
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -113,6 +113,7 @@ def _setup(context):
         gt_map_path = os.path.join(ROOT, gt_map_path)
     if map_odom_source not in ("static", "external"):
         raise RuntimeError(f"map_odom_source must be static | external, got {map_odom_source!r}")
+    start_delay = float(LaunchConfiguration("start_delay_s").perform(context))
     if sim_loopback and arm.lower() == "true":
         raise RuntimeError("sim_loopback:=true is a standalone demo; it cannot be combined with arm:=true")
 
@@ -163,7 +164,9 @@ def _setup(context):
         # Publishes /odometry/local, map_ned -> odom_ned (identity) and odom_ned -> base_link_frd.
         actions.append(ExecuteProcess(
             cmd=_node_cmd("pkg_maze_planning", "sim_loopback_node")
-            + ["--ros-args", "-p", "use_sim_time:=false", "-p", f"base_frame:={BASE_FRAME}"] + frames,
+            + ["--ros-args", "-p", "use_sim_time:=false", "-p", f"base_frame:={BASE_FRAME}"] + frames
+            + [a for k in ("x", "y", "yaw") for a in
+               ("-p", f"start_{k}:={float(LaunchConfiguration('loopback_start_' + k).perform(context))}")],
             cwd=ROOT, output="screen"))
     else:
         actions.append(ExecuteProcess(
@@ -191,7 +194,7 @@ def _setup(context):
     if planner == "astar":
         prefer_window = LaunchConfiguration("prefer_window").perform(context).lower() == "true"
         flat, names, arena = _course_goals(os.path.join(ROOT, "config", "arena_prior.json"), prefer_window)
-        actions.append(ExecuteProcess(
+        astar = ExecuteProcess(
             cmd=_node_cmd("pkg_maze_planning", "astar_planner_node")
             + ["--ros-args", "-p", f"use_sim_time:={sim_time_str}",
                "-p", f"groundtruth_map_path:={gt_map_path}",
@@ -205,7 +208,9 @@ def _setup(context):
                "-p", "goals:=[" + ",".join(f"{v:.6f}" for v in flat) + "]",
                "-p", "goal_names:=[" + ",".join(f"'{n}'" for n in names) + "]"]
             + frames,
-            cwd=ROOT, output="screen"))
+            cwd=ROOT, output="screen")
+        # start_delay_s: no path until then, so the vehicle waits at the launch mark (e.g. while RViz comes up)
+        actions.append(TimerAction(period=start_delay, actions=[astar]) if start_delay > 0 else astar)
     if planner == "rrt_star":
         actions.append(
             ExecuteProcess(
@@ -321,6 +326,14 @@ def generate_launch_description():
             DeclareLaunchArgument("planner", default_value="astar", description="astar | rrt_star (global planner)"),
             DeclareLaunchArgument("mppi_safe_distance_m", default_value="0.42",
                                   description="MPPI obstacle comfort radius, m (adaptive down to lethal 0.21 + 0.02 in tight passes)"),
+            DeclareLaunchArgument("loopback_start_x", default_value=str(LAUNCH_MARK_NED[0]),
+                                  description="sim_loopback only: start north, m (map NED; default the launch mark)"),
+            DeclareLaunchArgument("loopback_start_y", default_value=str(LAUNCH_MARK_NED[1]),
+                                  description="sim_loopback only: start east, m (map NED)"),
+            DeclareLaunchArgument("loopback_start_yaw", default_value="0.0",
+                                  description="sim_loopback only: start heading, rad (NED, 0 = north)"),
+            DeclareLaunchArgument("start_delay_s", default_value="0.0",
+                                  description="hold the global planner (and so the vehicle) this many seconds after launch"),
             DeclareLaunchArgument("astar_clearance_m", default_value="0.30",
                                   description="A* required wall clearance of the drone centre, m (training crash radius 0.20)"),
             DeclareLaunchArgument("astar_clearance_fallback_ratio", default_value="0.75",

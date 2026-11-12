@@ -1,0 +1,196 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 0.8
+      Cell Size: 1
+      Class: rviz_default_plugins/Grid
+      Color: 70; 70; 75
+      Enabled: true
+      Name: Arena Grid
+      Plane: XY
+      Plane Cell Count: 8
+      Reference Frame: <Fixed Frame>
+    - Class: rviz_default_plugins/TF
+      Enabled: false
+      Frame Timeout: 15
+      Marker Scale: 0.45
+      Name: TF Frames (map -> odom -> base_link)
+      Show Arrows: true
+      Show Axes: true
+      Show Names: true
+    - Alpha: 0.55
+      Autocompute Intensity Bounds: true
+      Class: rviz_default_plugins/PointCloud2
+      Color: 35; 75; 200
+      Color Transformer: FlatColor
+      Decay Time: 0
+      Enabled: false
+      Name: Cloud A (blue) - designed course, A* plans on this (/viz/groundtruth_map_cloud)
+      Position Transformer: XYZ
+      Size (Meters): 0.055
+      Style: Boxes
+      Topic:
+        Depth: 5
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /viz/groundtruth_map_cloud
+    - Alpha: 1
+      Autocompute Intensity Bounds: true
+      Class: rviz_default_plugins/PointCloud2
+      Color Transformer: RGB8
+      Decay Time: 0
+      Enabled: true
+      Name: Cloud B (red) - designed + UNMODELLED objects, A* never sees the objects (/viz/cloud_b)
+      Position Transformer: XYZ
+      Size (Pixels): 3
+      Style: Points
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /viz/cloud_b
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Unmodelled objects (/viz/unmodeled_objects)
+      Namespaces:
+        {}
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /viz/unmodeled_objects
+    - Alpha: 1
+      Autocompute Intensity Bounds: true
+      Class: rviz_default_plugins/PointCloud2
+      Color: 255; 130; 0
+      Color Transformer: FlatColor
+      Decay Time: 0
+      Enabled: true
+      Name: What the fake camera sees -> MPPI (/oak/points/clamped)
+      Position Transformer: XYZ
+      Size (Pixels): 4
+      Style: Points
+      Topic:
+        Depth: 1
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /oak/points/clamped
+    - Alpha: 0.65
+      Class: rviz_default_plugins/Map
+      Color Scheme: costmap
+      Draw Behind: true
+      Enabled: true
+      Name: MPPI costmap slice - walls + objects it has seen (/costmap/local_voxels)
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /costmap/local_voxels
+    - Alpha: 1
+      Buffer Length: 1
+      Class: rviz_default_plugins/Path
+      Color: 0; 230; 118
+      Enabled: true
+      Line Style: Billboards
+      Line Width: 0.045
+      Name: Global Path (/plan/global_path)
+      Topic:
+        Depth: 5
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /plan/global_path
+    - Alpha: 1
+      Buffer Length: 1
+      Class: rviz_default_plugins/Path
+      Color: 0; 191; 255
+      Enabled: true
+      Line Style: Billboards
+      Line Width: 0.035
+      Name: Odom-Transformed Local Reference (/plan/local_reference)
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /plan/local_reference
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: MPPI Candidate Rollouts (/viz/mppi_candidates)
+      Namespaces:
+        mppi_candidates: true
+        mppi_optimal: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /viz/mppi_candidates
+    - Angle Tolerance: 0.1
+      Class: rviz_default_plugins/Odometry
+      Covariance:
+        Value: false
+      Enabled: true
+      Keep: 1
+      Name: Quadrotor Odometry (/odometry/local)
+      Position Tolerance: 0.1
+      Shape:
+        Alpha: 1
+        Axes Length: 0.35
+        Axes Radius: 0.03
+        Color: 255; 215; 0
+        Head Length: 0.12
+        Head Radius: 0.06
+        Shaft Length: 0.25
+        Shaft Radius: 0.03
+        Value: Arrow
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /odometry/local
+  Enabled: true
+  Global Options:
+    Background Color: 220; 220; 225
+    Fixed Frame: map_ned
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 7.5
+      Enable Stereo Rendering:
+        Value: false
+      Focal Point:
+        X: 0.0
+        Y: 0.0
+        Z: -0.75
+      Focal Shape Fixed Size: true
+      Focal Shape Size: 0.05
+      Invert Z Axis: true
+      Name: Current View
+      Near Clip Distance: 0.01
+      Pitch: 0.85
+      Target Frame: <Fixed Frame>
+      Value: Orbit (rviz)
+      Yaw: 1.57
+Window Geometry:
+  Height: 960
+  Width: 1440

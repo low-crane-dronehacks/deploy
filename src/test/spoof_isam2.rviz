@@ -11,7 +11,7 @@ Visualization Manager:
   Displays:
     - Class: rviz_default_plugins/Grid
       Name: Grid (1 m, floor)
-      Enabled: true
+      Enabled: false
       Reference Frame: map
       Cell Size: 1
       Plane Cell Count: 8
@@ -33,7 +33,7 @@ Visualization Manager:
       Decay Time: 0
     - Class: rviz_default_plugins/Marker
       Name: CAD map (designed course, sitl/world/course.obj)
-      Enabled: true
+      Enabled: false
       Topic:
         Value: /spoof/cad_map
         Depth: 1
@@ -57,7 +57,7 @@ Visualization Manager:
       Decay Time: 0
     - Class: rviz_default_plugins/PointCloud2
       Name: iSAM2 full corrected map
-      Enabled: true
+      Enabled: false
       Topic:
         Value: /isam2_depth/map
         Depth: 1
@@ -92,7 +92,7 @@ Visualization Manager:
       Radius: 0.012
     - Class: rviz_default_plugins/MarkerArray
       Name: iSAM2 landmarks
-      Enabled: true
+      Enabled: false
       Topic:
         Value: /isam2_depth/landmarks
         Depth: 1
@@ -140,7 +140,7 @@ Visualization Manager:
       Alpha: 1
     - Class: rviz_default_plugins/Path
       Name: cuVSLAM path (orange, stereo:=true)
-      Enabled: true
+      Enabled: false
       Topic:
         Value: /spoof/vslam_path
         Depth: 1
@@ -178,7 +178,7 @@ Visualization Manager:
         Value: false
     - Class: rviz_default_plugins/TF
       Name: TF (truth base_link)
-      Enabled: true
+      Enabled: false
       Show Names: false
       Marker Scale: 0.5
       Frames:
@@ -187,7 +187,7 @@ Visualization Manager:
           Value: true
     - Class: rviz_default_plugins/Image
       Name: Depth
-      Enabled: true
+      Enabled: false
       Topic:
         Value: /camera/depth/image_raw
         Depth: 1

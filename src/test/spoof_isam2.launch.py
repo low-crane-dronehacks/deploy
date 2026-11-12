@@ -15,7 +15,7 @@ import shlex
 from pathlib import Path
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction, TimerAction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -35,8 +35,11 @@ def setup(context):
         Node(package='isam2_depth', executable='isam2_depth_node', name='isam2_depth', output='screen',
              parameters=[{'use_sim_time': True,
                           'map_save_path': LaunchConfiguration('map_save').perform(context)}]),
-        ExecuteProcess(cmd=['/usr/bin/python3', str(HERE / 'spoof_px4_depth.py'), ply, *extra], output='screen'),
     ]
+    # start_delay_s: the spoofed flight (fake PX4 + depth) starts this long after iSAM2 and RViz, so RViz is up first
+    spoof = ExecuteProcess(cmd=['/usr/bin/python3', str(HERE / 'spoof_px4_depth.py'), ply, *extra], output='screen')
+    delay = float(LaunchConfiguration('start_delay_s').perform(context))
+    actions.append(TimerAction(period=delay, actions=[spoof]) if delay > 0 else spoof)
     if stereo:
         # cuVSLAM lives in its own venv (docs/CUVSLAM_LOCAL.md); its CUDA math libraries come from NVIDIA's wheels
         venv = Path(os.path.expanduser(LaunchConfiguration('cuvslam_venv').perform(context)))
@@ -63,6 +66,8 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('ply', default_value='', description='course scan (.ply)'),
         DeclareLaunchArgument('rviz', default_value='true'),
+        DeclareLaunchArgument('start_delay_s', default_value='5.0',
+                              description='start the spoofed flight this many seconds after iSAM2 + RViz'),
         DeclareLaunchArgument('spoof_args', default_value='', description='extra spoof_px4_depth.py arguments'),
         DeclareLaunchArgument('stereo', default_value='false',
                               description='true = render a stereo pair + IMU from the scan and run cuVSLAM on it'),
