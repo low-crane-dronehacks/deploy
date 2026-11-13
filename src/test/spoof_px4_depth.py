@@ -48,7 +48,9 @@ from scipy.spatial.transform import Rotation
 
 DEPLOY_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(DEPLOY_ROOT / 'ego_planner' / 'scripts'))
+sys.path.insert(0, str(DEPLOY_ROOT / 'scripts'))
 import view_course_scan as vcs  # noqa: E402  (load_ply, to_ned, align, apply, Prior)
+from build_cad_prior import load_cad_objects  # noqa: E402
 
 G = 9.81
 # OAK-D S2-like camera (as src/test/test_depth_isam2.cpp) and its pose on the body
@@ -459,7 +461,7 @@ def run_ros(args, pts, rgb, tree, traj, est, renderer, stereo=None):
     from sensor_msgs.msg import CameraInfo, Image, Imu, PointCloud2, PointField
     from sensor_msgs_py import point_cloud2
     from std_msgs.msg import Header
-    from visualization_msgs.msg import Marker
+    from visualization_msgs.msg import Marker, MarkerArray
     from geometry_msgs.msg import Point
     from std_msgs.msg import ColorRGBA
     from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
@@ -482,8 +484,9 @@ def run_ros(args, pts, rgb, tree, traj, est, renderer, stereo=None):
     pub_info = node.create_publisher(CameraInfo, '/camera/depth/camera_info', qos_profile_sensor_data)
     pub_scan = node.create_publisher(PointCloud2, '/spoof/scan', latched)
     pub_cad = node.create_publisher(Marker, '/spoof/cad_map', latched)
+    pub_cad_scene = node.create_publisher(MarkerArray, '/spoof/cad_scene', latched)
     pub_paths = {k: node.create_publisher(PathMsg, f'/spoof/{k}_path', latched)
-                 for k in ('truth', 'px4', 'isam2', 'vslam')}
+                 for k in ('truth', 'px4', 'vio_icp', 'isam2', 'vslam')}
     if stereo is not None:
         pub_st = {e: node.create_publisher(Image, f'/stereo/{n}/image', qos_profile_sensor_data)
                   for e, n in (('l', 'left'), ('r', 'right'))}
@@ -532,15 +535,42 @@ def run_ros(args, pts, rgb, tree, traj, est, renderer, stereo=None):
               for k, n in enumerate(('x', 'y', 'z', 'rgb'))]
     cloud = np.concatenate([pts[idx].astype(np.float32), packed[:, None]], 1)
     pub_scan.publish(point_cloud2.create_cloud(Header(frame_id=world), fields, cloud.tolist()))
-    if args.cad:
-        tris = load_obj_triangles(args.cad)              # ENU metres = the RViz 'map' frame
-        mk = Marker(header=Header(frame_id='map'), ns='cad', id=0, type=Marker.TRIANGLE_LIST, action=Marker.ADD)
-        mk.pose.orientation.w = 1.0
-        mk.scale.x = mk.scale.y = mk.scale.z = 1.0
-        mk.color = ColorRGBA(r=0.75, g=0.75, b=0.8, a=0.35)
-        mk.points = [Point(x=float(a), y=float(b), z=float(c)) for a, b, c in tris.reshape(-1, 3)]
-        pub_cad.publish(mk)
-        print(f'CAD map: {len(tris)} triangles from {args.cad} on /spoof/cad_map')
+    if args.cad and args.cad.exists():
+        cad_objs = load_cad_objects(args.cad)
+        scene_arr = MarkerArray()
+        total_tris = 0
+        for mid, obj in enumerate(cad_objs):
+            tris = obj.verts_enu[obj.faces]
+            total_tris += len(tris)
+            mk = Marker(header=Header(frame_id='map'), ns='cad_v3', id=mid, action=Marker.ADD)
+            mk.pose.orientation.w = 1.0
+            r_c, g_c, b_c = obj.kd_rgb
+            if obj.category == 'net':
+                mn, mx = obj.verts_enu.min(0), obj.verts_enu.max(0)
+                mk.type = Marker.LINE_LIST
+                mk.scale.x = 0.015
+                mk.color = ColorRGBA(r=float(r_c), g=float(g_c), b=float(b_c), a=0.9)
+                corners = [
+                    (mn[0], mn[1], mn[2]), (mx[0], mn[1], mn[2]),
+                    (mx[0], mx[1], mn[2]), (mn[0], mx[1], mn[2]),
+                    (mn[0], mn[1], mx[2]), (mx[0], mn[1], mx[2]),
+                    (mx[0], mx[1], mx[2]), (mn[0], mx[1], mx[2]),
+                ]
+                edges = [(0,1),(1,2),(2,3),(3,0),(4,5),(5,6),(6,7),(7,4),(0,4),(1,5),(2,6),(3,7)]
+                pts_e = []
+                for a_i, b_i in edges:
+                    if corners[a_i] != corners[b_i]:
+                        pts_e.append(Point(x=float(corners[a_i][0]), y=float(corners[a_i][1]), z=float(corners[a_i][2])))
+                        pts_e.append(Point(x=float(corners[b_i][0]), y=float(corners[b_i][1]), z=float(corners[b_i][2])))
+                mk.points = pts_e
+            else:
+                mk.type = Marker.TRIANGLE_LIST
+                mk.scale.x = mk.scale.y = mk.scale.z = 1.0
+                mk.color = ColorRGBA(r=float(r_c), g=float(g_c), b=float(b_c), a=1.0)
+                mk.points = [Point(x=float(a), y=float(b), z=float(c)) for a, b, c in tris.reshape(-1, 3)]
+            scene_arr.markers.append(mk)
+        pub_cad_scene.publish(scene_arr)
+        print(f'CAD scene: {len(cad_objs)} textured objects ({total_tris} triangles) from {args.cad.name} on /spoof/cad_scene')
     truth_path = PathMsg(header=Header(frame_id=world))
     truth_path.poses = [pose(t_arr[i], p[i], R[i]) for i in range(0, len(t_arr), 10)]
     pub_paths['truth'].publish(truth_path)
@@ -564,17 +594,32 @@ def run_ros(args, pts, rgb, tree, traj, est, renderer, stereo=None):
         ci.d = [0.0] * 5
         st_info[e] = ci
 
-    rows, obstacle_cloud, map_cloud, kf_path, lock = [], [None], [None], [None], threading.Lock()
+    rows, icp_rows, obstacle_cloud, map_cloud, kf_path, lock = [], [], [None], [None], [None], threading.Lock()
     vrows = []                                            # cuVSLAM: (t, truth xyz, est xyz, yaw err deg)
     vslam_path = PathMsg(header=Header(frame_id=world))
     T_flu0 = np.eye(4)
     T_flu0[:3, :3], T_flu0[:3, 3] = R[0] @ F_FLU, p[0]    # cuVSLAM's world = the initial base_link (FLU)
     isam_path = PathMsg(header=Header(frame_id=world))
+    vio_icp_path = PathMsg(header=Header(frame_id=world))
     px4_path = PathMsg(header=Header(frame_id=world))
+    latest_vio_icp = [None]                               # (pv, yaw)
 
     def interp_truth(ts):
         i = int(np.clip(round(ts / dt), 0, len(t_arr) - 1))
         return i
+
+    def on_vio_icp(m: Odometry):
+        ts = m.header.stamp.sec + 1e-9 * m.header.stamp.nanosec
+        i = interp_truth(ts)
+        q = m.pose.pose.orientation
+        Rm = Rotation.from_quat([q.x, q.y, q.z, q.w]).as_matrix()
+        pv = np.array([m.pose.pose.position.x, m.pose.pose.position.y, m.pose.pose.position.z])
+        yw = yaw_of(Rm)
+        with lock:
+            latest_vio_icp[0] = (pv, yw)
+            icp_rows.append((ts, *p[i], yaw_of(R[i]), *pv, yw))
+            if len(icp_rows) % 5 == 0:
+                vio_icp_path.poses.append(pose(ts, pv, Rm))
 
     def on_odom(m: Odometry):
         ts = m.header.stamp.sec + 1e-9 * m.header.stamp.nanosec
@@ -583,7 +628,8 @@ def run_ros(args, pts, rgb, tree, traj, est, renderer, stereo=None):
         Rm = Rotation.from_quat([q.x, q.y, q.z, q.w]).as_matrix()
         pv = np.array([m.pose.pose.position.x, m.pose.pose.position.y, m.pose.pose.position.z])
         with lock:
-            rows.append((ts, *p[i], yaw_of(R[i]), *p_e[i], yaw_of(R_e[i]), *pv, yaw_of(Rm)))
+            icp_cur = latest_vio_icp[0] if latest_vio_icp[0] is not None else (p_e[i], yaw_of(R_e[i]))
+            rows.append((ts, *p[i], yaw_of(R[i]), *p_e[i], yaw_of(R_e[i]), *pv, yaw_of(Rm), *icp_cur[0], icp_cur[1]))
             if len(rows) % 5 == 0:
                 isam_path.poses.append(pose(ts, pv, Rm))
 
@@ -605,6 +651,7 @@ def run_ros(args, pts, rgb, tree, traj, est, renderer, stereo=None):
         obstacle_cloud[0] = m
 
     node.create_subscription(Odometry, '/isam2_depth/odometry', on_odom, 50)
+    node.create_subscription(Odometry, '/isam2_depth/vio_icp_odometry', on_vio_icp, 50)
     if stereo is not None:
         node.create_subscription(Odometry, '/visual_slam/tracking/odometry', on_vslam, 50)
     node.create_subscription(PointCloud2, '/isam2_depth/obstacles', on_obst, 1)
@@ -627,8 +674,10 @@ def run_ros(args, pts, rgb, tree, traj, est, renderer, stereo=None):
             return
         e_px4 = np.linalg.norm(a[:, 5:8] - a[:, 1:4], axis=1)
         e_isam = np.linalg.norm(a[:, 9:12] - a[:, 1:4], axis=1)
+        e_icp = np.linalg.norm(a[:, 13:16] - a[:, 1:4], axis=1)
         y_px4 = np.degrees(np.abs([wrap(x) for x in a[:, 8] - a[:, 4]]))
         y_isam = np.degrees(np.abs([wrap(x) for x in a[:, 12] - a[:, 4]]))
+        y_icp = np.degrees(np.abs([wrap(x) for x in a[:, 16] - a[:, 4]]))
         if not final:
             vs = ''
             if stereo is not None:
@@ -639,18 +688,21 @@ def run_ros(args, pts, rgb, tree, traj, est, renderer, stereo=None):
                     else:
                         vs = '   cuVSLAM -'
             print(f'  t={t_now:6.1f} s  error now: iSAM2 {e_isam[-1]:.3f} m / {y_isam[-1]:.1f} deg   '
-                  f'PX4 {e_px4[-1]:.3f} m / {y_px4[-1]:.1f} deg' + vs)
+                  f'VIO+ICP {e_icp[-1]:.3f} m / {y_icp[-1]:.1f} deg   '
+                  f'PX4(VIO) {e_px4[-1]:.3f} m / {y_px4[-1]:.1f} deg' + vs)
             return
         rms = lambda x: float(np.sqrt(np.mean(np.square(x))))
         print('\nsummary over %d iSAM2 odometry messages:' % len(a))
-        print(f'  position  iSAM2 rms {rms(e_isam):.3f}  max {e_isam.max():.3f}  final {e_isam[-1]:.3f} m')
-        print(f'            PX4   rms {rms(e_px4):.3f}  max {e_px4.max():.3f}  final {e_px4[-1]:.3f} m')
-        print(f'  yaw       iSAM2 rms {rms(y_isam):.2f}  max {y_isam.max():.2f}  final {y_isam[-1]:.2f} deg')
-        print(f'            PX4   rms {rms(y_px4):.2f}  max {y_px4.max():.2f}  final {y_px4[-1]:.2f} deg')
+        print(f'  position  iSAM2    rms {rms(e_isam):.3f}  max {e_isam.max():.3f}  final {e_isam[-1]:.3f} m')
+        print(f'            VIO+ICP  rms {rms(e_icp):.3f}  max {e_icp.max():.3f}  final {e_icp[-1]:.3f} m')
+        print(f'            PX4(VIO) rms {rms(e_px4):.3f}  max {e_px4.max():.3f}  final {e_px4[-1]:.3f} m')
+        print(f'  yaw       iSAM2    rms {rms(y_isam):.2f}  max {y_isam.max():.2f}  final {y_isam[-1]:.2f} deg')
+        print(f'            VIO+ICP  rms {rms(y_icp):.2f}  max {y_icp.max():.2f}  final {y_icp[-1]:.2f} deg')
+        print(f'            PX4(VIO) rms {rms(y_px4):.2f}  max {y_px4.max():.2f}  final {y_px4[-1]:.2f} deg')
         if args.csv:
             np.savetxt(args.csv, a, delimiter=',', fmt='%.5f', comments='',
                        header='t,truth_n,truth_e,truth_d,truth_yaw,px4_n,px4_e,px4_d,px4_yaw,'
-                              'isam2_n,isam2_e,isam2_d,isam2_yaw')
+                              'isam2_n,isam2_e,isam2_d,isam2_yaw,vio_icp_n,vio_icp_e,vio_icp_d,vio_icp_yaw')
             print(f'  rows written to {args.csv}')
         for name, oc in (('obstacle voxels (local window)', obstacle_cloud[0]), ('full map', map_cloud[0])):
             if oc is None:
@@ -749,6 +801,7 @@ def run_ros(args, pts, rgb, tree, traj, est, renderer, stereo=None):
                 pub_img.publish(img)
                 with lock:
                     pub_paths['px4'].publish(px4_path)
+                    pub_paths['vio_icp'].publish(vio_icp_path)
                     pub_paths['isam2'].publish(isam_path)
             if t_now >= next_report:
                 next_report += 5.0
@@ -798,8 +851,9 @@ def main(argv=None):
     g.add_argument('--px4_hz', type=float, default=50.0)
     g.add_argument('--seed', type=int, default=0)
     g.add_argument('--csv', type=Path, help='write truth / PX4 / iSAM2 rows here at the end')
-    g.add_argument('--cad', type=lambda s: Path(s) if s else None, default=DEPLOY_ROOT / 'sitl' / 'world' / 'course.obj',
-                   help="designed-course mesh (ENU OBJ) shown in RViz on /spoof/cad_map; '' = off")
+    g.add_argument('--cad', type=lambda s: Path(s) if s else None,
+                   default=DEPLOY_ROOT / 'config' / 'course_v3' / 'dronehacks-course-v3.obj',
+                   help="designed-course v3 CAD (.obj or .zip) shown on /spoof/cad_scene; '' = off")
     g.add_argument('--plan_png', type=Path, help='no ROS: save the route + sample depth frames and exit')
     g = ap.add_argument_group('stereo + IMU for cuVSLAM (docs/CUVSLAM_LOCAL.md)')
     g.add_argument('--stereo', action='store_true', help='also publish a rendered mono pair + IMU on /stereo/*')

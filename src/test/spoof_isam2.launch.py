@@ -15,7 +15,9 @@ import shlex
 from pathlib import Path
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction, TimerAction
+from launch.actions import DeclareLaunchArgument, EmitEvent, ExecuteProcess, OpaqueFunction, RegisterEventHandler, TimerAction
+from launch.event_handlers import OnProcessExit
+from launch.events import Shutdown
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -26,14 +28,20 @@ DEPLOY = HERE.parents[1]
 def setup(context):
     ply = LaunchConfiguration('ply').perform(context)
     if not ply:
-        raise RuntimeError('ply:=<path to the course scan .ply> is required')
+        default_ply = DEPLOY / 'dronehacks-course-scan-2026-11-06.ply'
+        if default_ply.exists():
+            ply = str(default_ply)
+        else:
+            raise RuntimeError('ply:=<path to the course scan .ply> is required')
     extra = shlex.split(LaunchConfiguration('spoof_args').perform(context))
     stereo = LaunchConfiguration('stereo').perform(context).lower() in ('1', 'true', 'yes')
     if stereo and '--stereo' not in extra:
         extra.append('--stereo')
+    cad_prior = LaunchConfiguration('cad_prior').perform(context)
     actions = [
         Node(package='isam2_depth', executable='isam2_depth_node', name='isam2_depth', output='screen',
              parameters=[{'use_sim_time': True,
+                          'cad_prior_path': cad_prior,
                           'map_save_path': LaunchConfiguration('map_save').perform(context)}]),
     ]
     # start_delay_s: the spoofed flight (fake PX4 + depth) starts this long after iSAM2 and RViz, so RViz is up first
@@ -59,12 +67,16 @@ def setup(context):
     if LaunchConfiguration('rviz').perform(context).lower() in ('1', 'true', 'yes'):
         actions.append(Node(package='rviz2', executable='rviz2', arguments=['-d', str(HERE / 'spoof_isam2.rviz')],
                             parameters=[{'use_sim_time': True}], output='log'))
+    else:
+        actions.append(RegisterEventHandler(OnProcessExit(target_action=spoof, on_exit=[EmitEvent(event=Shutdown())])))
     return actions
 
 
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('ply', default_value='', description='course scan (.ply)'),
+        DeclareLaunchArgument('cad_prior', default_value=str(DEPLOY / 'config' / 'cad_prior_esdf.bin'),
+                              description='CAD-derived 3D ESDF prior (.bin, "" = disable prior factor)'),
         DeclareLaunchArgument('rviz', default_value='true'),
         DeclareLaunchArgument('start_delay_s', default_value='5.0',
                               description='start the spoofed flight this many seconds after iSAM2 + RViz'),

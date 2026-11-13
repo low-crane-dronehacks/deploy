@@ -23,6 +23,7 @@
 #include <gtsam/nonlinear/ISAM2.h>
 #include <gtsam/nonlinear/Values.h>
 
+#include "isam2_depth/cad_prior.hpp"
 #include "isam2_depth/depth_icp.hpp"
 #include "isam2_depth/distance_grid.hpp"
 #include "isam2_depth/mppi_interface.hpp"
@@ -42,8 +43,8 @@ struct Isam2Params {
   double kf_max_interval = 0.5;          // s
 
   // PX4 relative-motion factor
-  double odom_sigma_trans = 0.02, odom_sigma_trans_per_m = 0.05;     // m, m/m
-  double odom_sigma_rot = 0.005, odom_sigma_rot_per_rad = 0.05;      // rad, rad/rad
+  double odom_sigma_trans = 0.03, odom_sigma_trans_per_m = 0.06;     // m, m/m
+  double odom_sigma_rot = 0.015, odom_sigma_rot_per_rad = 0.08;      // rad, rad/rad
   double attitude_sigma = 0.03;          // rad, PX4 roll / pitch
   double vel_sigma = 0.15;               // m/s, PX4 velocity
   double kin_sigma = 0.05;               // m, trapezoidal position/velocity consistency
@@ -61,15 +62,43 @@ struct Isam2Params {
   int link_min_age = 5;                  // keyframes; nearer ones are already chained by odometry + ICP
   int keep_dense = 150;                  // newest keyframes keeping their organised cloud for revisit ICP (~0.4 MB each)
 
+  // CAD-derived 3D ESDF prior factor (optional; enabled when setCadPrior() is given a loaded CadPriorEsdf)
+  CadPriorParams cad_prior;
+  double cad_sigma_max_trans = 1.0, cad_sigma_max_rot = 0.5;
+
   // map for the MPPI
   double map_voxel = 0.05;               // m, per-keyframe cloud downsampling
   double map_radius = 8.0;               // m, keyframes farther than this from the vehicle are left out
   GridParams grid;
 };
 
+// Benchmark baseline: VIO + sequential standard point-to-plane ICP without factor-graph smoothing,
+// gravity attitude factor, directional covariance fusion, revisit closures, or CAD prior.
+class VioIcpTracker {
+ public:
+  VioIcpTracker(const Isam2Params& p, const PinholeCamera& cam, const gtsam::Pose3& T_body_cam);
+
+  bool addFrame(const DepthFrame& depth, const OdomSample& odom);
+  bool initialised() const { return init_; }
+  MppiInput predict(const OdomSample& now) const;
+
+ private:
+  Isam2Params p_;
+  IcpParams std_icp_;
+  PinholeCamera cam_;
+  gtsam::Pose3 T_bc_, T_cb_;
+  bool init_ = false;
+  OdomSample last_odom_;
+  gtsam::Pose3 T_wb_;
+  Eigen::Vector3d v_world_ = Eigen::Vector3d::Zero();
+  std::optional<OrganisedCloud> last_cloud_;
+};
+
 class DepthIsam2 {
  public:
   DepthIsam2(const Isam2Params& p, const PinholeCamera& cam, const gtsam::Pose3& T_body_cam);
+
+  void setCadPrior(std::shared_ptr<const CadPriorEsdf> prior) { cad_prior_ = std::move(prior); }
 
   // One depth frame with PX4's estimate at the frame's stamp. Returns true if it became a keyframe (the graph
   // was updated and latest() changed). Landmark observations force a keyframe.
@@ -84,8 +113,9 @@ class DepthIsam2 {
   struct Stats {
     size_t keyframes = 0, factors = 0;
     int icp_ok = 0, icp_rejected = 0, links = 0;
+    int cad_ok = 0, cad_rejected = 0;
     double last_update_ms = 0;                       // whole keyframe, of which:
-    double icp_ms = 0, isam_ms = 0, output_ms = 0;   // depth ICP, iSAM2 update + estimate, covariance + grid
+    double icp_ms = 0, cad_ms = 0, isam_ms = 0, output_ms = 0;
   };
   const Stats& stats() const { return stats_; }
   const gtsam::Values& estimate() const { return estimate_; }
@@ -113,11 +143,14 @@ class DepthIsam2 {
   // ICP between keyframe clouds as a body-frame BetweenFactor X(j)->X(k); false if rejected.
   bool addIcpFactor(size_t j, size_t k, const OrganisedCloud& cloud_k, const gtsam::Pose3& predicted_rel,
                     gtsam::NonlinearFactorGraph& g);
+  bool addCadPriorFactor(size_t k, const OrganisedCloud& cloud_k, const gtsam::Pose3& X_init,
+                         gtsam::NonlinearFactorGraph& g);
   void rebuildOutput(size_t k);
 
   Isam2Params p_;
   PinholeCamera cam_;
   gtsam::Pose3 T_bc_, T_cb_;
+  std::shared_ptr<const CadPriorEsdf> cad_prior_;
   gtsam::ISAM2 isam_;
   gtsam::Values estimate_;
   std::vector<Keyframe> kfs_;

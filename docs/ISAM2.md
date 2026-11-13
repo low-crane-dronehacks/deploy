@@ -24,6 +24,7 @@ The estimator produces two things, both in PX4's local frame (NED world, FRD bod
 | `Pose3AttitudeFactor` | X(k) | PX4 roll / pitch (gravity-referenced; neither ICP nor odometry observes them absolutely) |
 | `BodyVelocityFactor` | X(k), V(k) | PX4 velocity in the body frame, so PX4's yaw drift does not leak in |
 | `KinematicFactor` | X(k-1), V(k-1), X(k), V(k) | p_k - p_(k-1) = dt (v_(k-1) + v_k) / 2 |
+| `PriorFactor<Pose3>` (CAD ESDF) | X(k) | projective point-to-CAD-plane registration of keyframe depth against `config/cad_prior_esdf.bin` (`CADP` v1 5 cm exact closest-point + triangle-normal ESDF built from `dronehacks-course-v3-obj.zip` via `scripts/build_cad_prior.py`), normal-gated (`cos >= 0.90`), distance-gated (`<= 0.14 m`), Cauchy M-estimated (`k = 0.04 m`), and Huber-wrapped in GTSAM so shifted as-built walls in the real course are rejected while faithful CAD geometry anchors global drift |
 | `BodyPointFactor` | X(k), L(id) | a 3D landmark measured in depth, e.g. the landing-pad ring centre (`addFrame(..., obs)`; no detector here) |
 
 **Keyframes:** a new keyframe is taken after 0.25 m, 10 deg or 0.5 s of PX4 motion.
@@ -47,10 +48,11 @@ out.
 ## Code
 
 ```
-src/include/isam2_depth/   types, depth_icp (cloud + ICP), factors, distance_grid, depth_isam2, mppi_interface
-src/*.cpp                  core library: Eigen + GTSAM only, no ROS
+src/include/isam2_depth/   types, depth_icp (cloud + ICP), cad_prior (CADP v1 ESDF), factors, distance_grid, depth_isam2, mppi_interface
+src/*.cpp                  core library: Eigen + GTSAM only, no ROS (includes VioIcpTracker baseline)
 src/ros/isam2_depth_node.cpp   ROS 2 node (built only when px4_msgs is found)
-src/test/                  synthetic test: ray-cast depth in a 6 x 6 x 3 m room with pillars
+src/test/                  synthetic test + scan-depth spoof benchmark (spoof_px4_depth.py, spoof_isam2.launch.py)
+scripts/build_cad_prior.py builds config/cad_prior_esdf.bin (CADP v1) + config/arena_prior.bin from dronehacks-course-v3.obj
 ```
 
 **MPPI hook, across processes (what `launch/maze_autonomy.launch.py isam2:=true` does):** `mppi_controller_node`
@@ -87,6 +89,7 @@ cmake -S src -B build && cmake --build build && ./build/test_depth_isam2
 
 **Topics:**
 - `~/odometry` (nav_msgs/Odometry at the PX4 rate; covariance reordered to ROS's [trans, rot])
+- `~/vio_icp_odometry` (nav_msgs/Odometry at the PX4 rate): benchmark-only VIO + standard frame-to-frame point-to-point ICP (`VioIcpTracker`) without factor graph optimization, revisit loop closures, kinematic/attitude/body-velocity factors, or CAD prior
 - `~/obstacles` (PointCloud2 of occupied voxels, per keyframe): the local window the MPPI sees
 - `~/keyframes` (nav_msgs/Path, latched): every keyframe pose at its current smoothed value, per keyframe. This is
   the paper's output, the whole trajectory re-estimated; past poses move when ICP or revisit links correct them.
@@ -135,22 +138,15 @@ ros2 launch src/test/spoof_isam2.launch.py ply:=... rviz:=false spoof_args:='--n
 RViz (fixed frame `map`, ENU above the NED world): scan (RGB), truth path green, spoofed PX4 path red, iSAM2 path
 blue, obstacle voxels orange, depth image. Drift knobs: `--yaw_drift_deg_s`, `--yaw_rw_deg`, `--scale`, `--pos_rw`.
 
-Results (2026-11-07, scan of 2026-11-06, 14.6 m route in 36 s, no revisits after the first 20 s):
+Results (2026-11-12, CAD prior derived strictly from `dronehacks-course-v3-obj.zip` -> `config/cad_prior_esdf.bin`, live depth sampled from `dronehacks-course-scan-2026-11-06.ply` where ~47% of walls differ 0.2–0.6 m from CAD, 14.6 m route in 36 s):
 
-| fake PX4 estimate | PX4 error rms / final | iSAM2 error rms / final |
+| estimator (`0.5 deg/s` yaw bias, `4%` scale, `1 cm/sqrt(s)` walk) | position rms / final | yaw rms / final |
 |---|---|---|
-| perfect | 0 | 0.06 m / 0.09 m, 0.9 deg rms |
-| 0.5 deg/s yaw bias, 4% scale, 1 cm/sqrt(s) walk | 0.37 m / 0.68 m, 15.5 deg final | 0.14-0.16 m / 0.28-0.32 m, 6.3-6.6 deg final |
+| Spoofed PX4 VIO (`/fmu/out/*`) | `0.371 m / 0.683 m` | `8.68 deg / 15.52 deg` |
+| VIO + Standard ICP (`~/vio_icp_odometry`, no factor graph) | `0.337 m / 0.717 m` | `5.77 deg / 9.48 deg` |
+| **iSAM2 Factor Graph + CAD ESDF Prior (`~/odometry`)** | **`0.119 m / 0.281 m`** (`0.106 m` smoothed keyframes) | **`3.01 deg / 4.69 deg`** (`2.47 deg` smoothed keyframes) |
 
-Obstacle voxels (local window): median 0.05-0.07 m from the scan surface. Full corrected map (`~/map`, ~64k
-voxels after the route): median 0.058 m, 77% within 10 cm. Smoothed keyframes (`~/keyframes`, the final estimate of
-every past pose) with drift: 0.125-0.130 m rms, 3.0-3.1 deg rms, slightly better than the live estimate was at the
-time (0.135-0.139 m), as smoothing should be. Keyframe update 12-20 ms (ICP 1-8 ms, iSAM2 < 0.5 ms).
-
-Reading: depth cuts the drift by about 2.5x but cannot remove it on a route that does not revisit places; only
-relative constraints exist (ICP between keyframes, revisit links). Absolute correction needs the prior-map factor
-(register depth against `config/arena_prior.bin`), which is not written. With perfect odometry the graph adds
-6 cm rms: ICP on splatted, noisy depth is slightly biased (the synthetic test's raycast depth gave 7 mm).
+Obstacle voxels (local window, ~12k voxels): median `0.048 m` from the scan surface (`79%` within 10 cm). Full corrected map (`~/map`, ~63.5k voxels after the route): median `0.031 m`, `86%` within 10 cm. On this 88-keyframe route, `CadPriorEsdf` accepted `23` alignments on faithful CAD geometry (`Barrier 1/2/3`, `M1`, `C2a`, `Tube oval`, `Floor`) and gated out `64` views dominated by shifted as-built walls (`M2`, `M3`, `A1`, `C1`), adding `0.1–3.3 ms` per keyframe (`13–27 ms` total keyframe update).
 
 ## Status (2026-11-07)
 

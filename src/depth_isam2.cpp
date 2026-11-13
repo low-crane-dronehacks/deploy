@@ -51,7 +51,112 @@ std::vector<Eigen::Vector3f> voxelDownsample(const std::vector<Eigen::Vector3f>&
   }
   return out;
 }
+// Standard Besl-McKay point-to-point projective ICP step fused with VIO motion prediction (no normals,
+// no factor graph, no gravity attitude constraint, no revisit closures, no CAD prior).
+std::optional<gtsam::Pose3> standardPointToPointIcp(const OrganisedCloud& tgt, const OrganisedCloud& src,
+                                                    const gtsam::Pose3& init, const IcpParams& p) {
+  if (tgt.n_valid < p.min_inliers || src.n_valid < p.min_inliers) return std::nullopt;
+  Eigen::Matrix<double, 6, 1> vio_info;
+  // Fuse with VIO prediction (sigma_rot ~ 1.5 deg, sigma_trans ~ 4 cm per step)
+  vio_info << Eigen::Vector3d::Constant(1.0 / (0.026 * 0.026)),
+      Eigen::Vector3d::Constant(1.0 / (0.04 * 0.04));
+
+  gtsam::Pose3 T = init;
+  const PinholeCamera& k = tgt.cam;
+  for (int it = 0; it < 20; ++it) {
+    const Eigen::Matrix3d R = T.rotation().matrix();
+    const Eigen::Vector3d t = T.translation();
+    Eigen::Matrix<double, 6, 6> H = Eigen::Matrix<double, 6, 6>::Zero();
+    Eigen::Matrix<double, 6, 1> g = Eigen::Matrix<double, 6, 1>::Zero();
+    int inliers = 0, seen = 0;
+    for (size_t i = 0; i < src.points.size(); ++i) {
+      if (!std::isfinite(src.points[i].z()) || (seen++ % 3) != 0) continue;
+      const Eigen::Vector3d ps = src.points[i].cast<double>();
+      const Eigen::Vector3d pt = R * ps + t;
+      if (pt.z() < 0.05) continue;
+      const int u = static_cast<int>(std::lround(k.fx * pt.x() / pt.z() + k.cx));
+      const int v = static_cast<int>(std::lround(k.fy * pt.y() / pt.z() + k.cy));
+      if (u < 0 || v < 0 || u >= k.width || v >= k.height) continue;
+      const Eigen::Vector3f& qf = tgt.points[v * k.width + u];
+      if (!std::isfinite(qf.z())) continue;
+      const Eigen::Vector3d q = qf.cast<double>();
+      const Eigen::Vector3d r = pt - q;   // 3D point-to-point residual
+      if (r.norm() > 0.20) continue;
+      const double sigma = 0.03 + 0.012 * q.z() * q.z();
+      const double w = 1.0 / (sigma * sigma * 18.0);
+      // Right perturbation d(R ps + t) = R (-[ps]x dw + dv)
+      Eigen::Matrix<double, 3, 6> J;
+      Eigen::Matrix3d skew;
+      skew << 0.0, -ps.z(), ps.y(), ps.z(), 0.0, -ps.x(), -ps.y(), ps.x(), 0.0;
+      J.leftCols<3>().noalias() = -R * skew;
+      J.rightCols<3>() = R;
+      H.noalias() += w * J.transpose() * J;
+      g.noalias() += w * J.transpose() * r;
+      ++inliers;
+    }
+    if (inliers < 100) return std::nullopt;
+    const Eigen::Matrix<double, 6, 1> dev = gtsam::Pose3::Logmap(init.between(T));
+    H += Eigen::Matrix<double, 6, 6>(vio_info.asDiagonal());
+    g += vio_info.cwiseProduct(dev);
+    const Eigen::Matrix<double, 6, 1> dx = -H.ldlt().solve(g);
+    if (!dx.allFinite()) return std::nullopt;
+    T = T * gtsam::Pose3::Expmap(dx);
+    if (dx.head<3>().norm() < 1e-4 && dx.tail<3>().norm() < 1e-4) break;
+  }
+  return T;
+}
 }  // namespace
+
+VioIcpTracker::VioIcpTracker(const Isam2Params& p, const PinholeCamera& cam, const gtsam::Pose3& T_body_cam)
+    : p_(p), std_icp_(p.icp), cam_(cam), T_bc_(T_body_cam), T_cb_(T_body_cam.inverse()) {}
+
+bool VioIcpTracker::addFrame(const DepthFrame& depth, const OdomSample& odom) {
+  gtsam::Pose3 rel_odom;
+  if (init_) {
+    rel_odom = last_odom_.T_world_body.between(odom.T_world_body);
+    const bool moved = rel_odom.translation().norm() >= p_.kf_min_translation ||
+                       angle(rel_odom.rotation()) >= p_.kf_min_rotation_deg * kDeg;
+    if (!moved && odom.stamp - last_odom_.stamp < p_.kf_max_interval) return false;
+    if (odom.stamp <= last_odom_.stamp) return false;
+  }
+  OrganisedCloud cloud = makeCloud(depth, cam_, p_.cloud);
+  if (!init_) {
+    T_wb_ = odom.T_world_body;
+    v_world_ = odom.v_world;
+    last_odom_ = odom;
+    last_cloud_ = std::move(cloud);
+    init_ = true;
+    return true;
+  }
+
+  gtsam::Pose3 step = rel_odom;
+  if (last_cloud_) {
+    const gtsam::Pose3 init_cam = T_cb_ * rel_odom * T_bc_;
+    if (const auto T_icp = standardPointToPointIcp(*last_cloud_, cloud, init_cam, std_icp_)) {
+      const gtsam::Pose3 cand = T_bc_ * (*T_icp) * T_cb_;
+      const gtsam::Pose3 err = rel_odom.between(cand);
+      if (err.translation().norm() <= p_.icp_gate_trans && angle(err.rotation()) <= p_.icp_gate_rot_deg * kDeg) {
+        step = cand;
+      }
+    }
+  }
+  T_wb_ = T_wb_ * step;
+  const gtsam::Rot3 R_corr = T_wb_.rotation() * odom.T_world_body.rotation().inverse();
+  v_world_ = R_corr.rotate(gtsam::Point3(odom.v_world));
+  last_odom_ = odom;
+  last_cloud_ = std::move(cloud);
+  return true;
+}
+
+MppiInput VioIcpTracker::predict(const OdomSample& now) const {
+  MppiInput out;
+  out.stamp = now.stamp;
+  if (!init_) return out;
+  out.T_world_body = T_wb_ * last_odom_.T_world_body.between(now.T_world_body);
+  const gtsam::Rot3 R_corr = T_wb_.rotation() * last_odom_.T_world_body.rotation().inverse();
+  out.v_world = R_corr.rotate(gtsam::Point3(now.v_world));
+  return out;
+}
 
 DepthIsam2::DepthIsam2(const Isam2Params& p, const PinholeCamera& cam, const gtsam::Pose3& T_body_cam)
     : p_(p), cam_(cam), T_bc_(T_body_cam), T_cb_(T_body_cam.inverse()), isam_(isamParams(p)) {}
@@ -135,6 +240,12 @@ bool DepthIsam2::addFrame(const DepthFrame& depth, const OdomSample& odom, const
       }
     }
     stats_.icp_ms = ms(ti, Clock::now());
+    if (cad_prior_) {
+      const auto tc = Clock::now();
+      if (addCadPriorFactor(k, cloud, X_init, g)) ++stats_.cad_ok;
+      else ++stats_.cad_rejected;
+      stats_.cad_ms = ms(tc, Clock::now());
+    }
   }
   init.insert(X(k), X_init);
   g.emplace_shared<BodyVelocityFactor>(X(k), V(k), R_px4.unrotate(gtsam::Point3(odom.v_world)),
@@ -185,6 +296,25 @@ bool DepthIsam2::addIcpFactor(size_t j, size_t k, const OrganisedCloud& cloud_k,
   info.diagonal().tail<3>().array() += 1.0 / (p_.icp_sigma_max_trans * p_.icp_sigma_max_trans);
   g.emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
       X(j), X(k), rel,
+      nm::Robust::Create(nm::mEstimator::Huber::Create(1.345), nm::Gaussian::Information(info)));
+  return true;
+}
+
+bool DepthIsam2::addCadPriorFactor(size_t k, const OrganisedCloud& cloud_k, const gtsam::Pose3& X_init,
+                                   gtsam::NonlinearFactorGraph& g) {
+  if (!cad_prior_) return false;
+  const auto r = alignToCadPrior(cloud_k, T_bc_, X_init, *cad_prior_, p_.cad_prior);
+  if (!r) return false;
+  const gtsam::Pose3 err = X_init.between(r->T_world_body);
+  if (err.translation().norm() > p_.cad_prior.gate_trans ||
+      angle(err.rotation()) > p_.cad_prior.gate_rot_deg * kDeg) {
+    return false;
+  }
+  gtsam::Matrix6 info = r->info;
+  info.diagonal().head<3>().array() += 1.0 / (p_.cad_sigma_max_rot * p_.cad_sigma_max_rot);
+  info.diagonal().tail<3>().array() += 1.0 / (p_.cad_sigma_max_trans * p_.cad_sigma_max_trans);
+  g.emplace_shared<gtsam::PriorFactor<gtsam::Pose3>>(
+      X(k), r->T_world_body,
       nm::Robust::Create(nm::mEstimator::Huber::Create(1.345), nm::Gaussian::Information(info)));
   return true;
 }

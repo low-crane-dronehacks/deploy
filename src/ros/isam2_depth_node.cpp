@@ -59,6 +59,18 @@ class Isam2DepthNode : public rclcpp::Node {
     max_odom_gap_ = declare_parameter("max_odom_gap", 0.1);   // s: a depth frame needs PX4 data this close
     map_period_ = declare_parameter("map_publish_period", 1.0);   // s between ~/map rebuilds (cost grows with keyframes)
     map_save_path_ = declare_parameter<std::string>("map_save_path", "");   // "" = do not save at shutdown
+    cad_prior_path_ = declare_parameter<std::string>("cad_prior_path", ""); // optional CADP v1 3D ESDF prior
+    if (!cad_prior_path_.empty()) {
+      std::string err;
+      cad_prior_ = CadPriorEsdf::load(cad_prior_path_, &err);
+      if (cad_prior_) {
+        const auto shp = cad_prior_->shape();
+        RCLCPP_INFO(get_logger(), "loaded CAD prior ESDF %s (%dx%dx%d @ %.2f m)",
+                    cad_prior_path_.c_str(), shp.x(), shp.y(), shp.z(), cad_prior_->resolution());
+      } else {
+        RCLCPP_WARN(get_logger(), "CAD prior ESDF disabled (%s)", err.c_str());
+      }
+    }
     loadParams();
 
     tf_buffer_ = std::make_unique<tf2_ros::Buffer>(get_clock());
@@ -75,6 +87,7 @@ class Isam2DepthNode : public rclcpp::Node {
     sub_depth_ = create_subscription<sensor_msgs::msg::Image>(
         depth_topic_, rclcpp::SensorDataQoS(), [this](sensor_msgs::msg::Image::ConstSharedPtr m) { onDepth(*m); });
     pub_odom_ = create_publisher<nav_msgs::msg::Odometry>("~/odometry", 10);
+    pub_vio_icp_odom_ = create_publisher<nav_msgs::msg::Odometry>("~/vio_icp_odometry", 10);
     pub_obst_ = create_publisher<sensor_msgs::msg::PointCloud2>("~/obstacles", 1);
     const auto latched = rclcpp::QoS(1).reliable().transient_local();   // RViz joining late still gets the last one
     pub_kf_ = create_publisher<nav_msgs::msg::Path>("~/keyframes", latched);
@@ -124,7 +137,10 @@ class Isam2DepthNode : public rclcpp::Node {
     while (!odom_.empty() && odom_.front().stamp < s.stamp - 2.0) odom_.pop_front();
     if (!est_ || !est_->initialised()) return;
     const MppiInput in = est_->predict(s);
-    publishOdometry(in);
+    publishOdometry(*pub_odom_, in);
+    if (vio_icp_ && vio_icp_->initialised() && pub_vio_icp_odom_->get_subscription_count() > 0) {
+      publishOdometry(*pub_vio_icp_odom_, vio_icp_->predict(s));
+    }
     if (sink_) sink_->onEstimate(in);
   }
 
@@ -205,6 +221,8 @@ class Isam2DepthNode : public rclcpp::Node {
       const gtsam::Rot3 R_flu = gtsam::Rot3::Quaternion(r.w, r.x, r.y, r.z);
       const gtsam::Pose3 T_bc(gtsam::Rot3(F * R_flu.matrix()), gtsam::Point3(F * gtsam::Vector3(t.x, t.y, t.z)));
       est_ = std::make_unique<DepthIsam2>(p_, *cam_, T_bc);
+      if (cad_prior_) est_->setCadPrior(cad_prior_);
+      vio_icp_ = std::make_unique<VioIcpTracker>(p_, *cam_, T_bc);
       const gtsam::Vector3 axis = T_bc.rotation().matrix().col(2);
       RCLCPP_INFO(get_logger(), "camera %dx%d fx %.1f; optical axis in body FRD (%.2f, %.2f, %.2f), t (%.3f, %.3f, %.3f)",
                   cam_->width, cam_->height, cam_->fx, axis.x(), axis.y(), axis.z(), T_bc.translation().x(),
@@ -227,6 +245,7 @@ class Isam2DepthNode : public rclcpp::Node {
                            odom_.size());
       return;
     }
+    if (vio_icp_) vio_icp_->addFrame(*frame, *odom);
     if (!est_->addFrame(*frame, *odom)) return;
     if (publish_obstacles_ && pub_obst_->get_subscription_count() > 0) publishObstacles(m.header.stamp);
     if (pub_kf_->get_subscription_count() > 0) publishKeyframes(m.header.stamp);
@@ -238,7 +257,7 @@ class Isam2DepthNode : public rclcpp::Node {
     }
   }
 
-  void publishOdometry(const MppiInput& in) {
+  void publishOdometry(rclcpp::Publisher<nav_msgs::msg::Odometry>& pub, const MppiInput& in) {
     nav_msgs::msg::Odometry o;
     o.header.stamp = rclcpp::Time(static_cast<int64_t>(in.stamp * 1e9), get_clock()->get_clock_type());
     o.header.frame_id = world_frame_;
@@ -251,7 +270,7 @@ class Isam2DepthNode : public rclcpp::Node {
       for (int j = 0; j < 6; ++j) o.pose.covariance[i * 6 + j] = in.pose_cov((i + 3) % 6, (j + 3) % 6);
     for (int i = 0; i < 3; ++i)
       for (int j = 0; j < 3; ++j) o.twist.covariance[i * 6 + j] = in.vel_cov(i, j);
-    pub_odom_->publish(o);
+    pub.publish(o);
   }
 
   void publishObstacles(const builtin_interfaces::msg::Time& stamp) {
@@ -382,9 +401,10 @@ class Isam2DepthNode : public rclcpp::Node {
   void logStats() {
     if (!est_) return;
     const auto& s = est_->stats();
-    RCLCPP_INFO(get_logger(), "%zu keyframes, %zu factors, ICP ok %d / rejected %d, %d revisit links, last update "
-                "%.1f ms (icp %.1f, isam2 %.1f, grid %.1f)", s.keyframes, s.factors, s.icp_ok, s.icp_rejected, s.links,
-                s.last_update_ms, s.icp_ms, s.isam_ms, s.output_ms);
+    RCLCPP_INFO(get_logger(), "%zu keyframes, %zu factors, ICP ok %d / rej %d, CAD ok %d / rej %d, %d revisit links, "
+                "last update %.1f ms (icp %.1f, cad %.1f, isam2 %.1f, grid %.1f)",
+                s.keyframes, s.factors, s.icp_ok, s.icp_rejected, s.cad_ok, s.cad_rejected, s.links,
+                s.last_update_ms, s.icp_ms, s.cad_ms, s.isam_ms, s.output_ms);
   }
 
   Isam2Params p_;
@@ -392,12 +412,14 @@ class Isam2DepthNode : public rclcpp::Node {
   bool publish_obstacles_ = true;
   double max_odom_gap_ = 0.1;
   double map_period_ = 1.0, last_map_ = -1e18;
-  std::string map_save_path_;
+  std::string map_save_path_, cad_prior_path_;
+  std::shared_ptr<const CadPriorEsdf> cad_prior_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_save_;
   std::optional<PinholeCamera> cam_;
   std::optional<gtsam::Rot3> q_;
   std::deque<OdomSample> odom_;
   std::unique_ptr<DepthIsam2> est_;
+  std::unique_ptr<VioIcpTracker> vio_icp_;
   std::shared_ptr<MppiStateSink> sink_;
   std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
   std::unique_ptr<tf2_ros::TransformListener> tf_listener_;
@@ -405,7 +427,7 @@ class Isam2DepthNode : public rclcpp::Node {
   rclcpp::Subscription<px4_msgs::msg::VehicleAttitude>::SharedPtr sub_att_;
   rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr sub_info_;
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr sub_depth_;
-  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom_;
+  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom_, pub_vio_icp_odom_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_obst_, pub_map_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_kf_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_lm_;

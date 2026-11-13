@@ -209,5 +209,52 @@
       "alt_nominal_m": 0.78,
       "nominal_clearance_m": 0.4392
     }
-  ]
+  ],
+  "cad_source": "dronehacks-course-v3-obj.zip (dronehacks-course-v3.obj + .mtl)",
+  "isam2_prior": {
+    "binary_file": "cad_prior_esdf.bin",
+    "format": "CADP_v1_closest_point_normal_esdf",
+    "resolution_m": 0.05,
+    "lo_ned": [
+      -3.2,
+      -3.2,
+      -3.2
+    ],
+    "hi_ned": [
+      3.2,
+      3.2,
+      0.2
+    ],
+    "shape": [
+      129,
+      129,
+      69
+    ],
+    "pieces_included": [
+      "Tube cradle 1",
+      "Net side east",
+      "C2b chicane wall",
+      "Barrier 3 (cut to 55 in)",
+      "Barrier 2",
+      "Boulder 1",
+      "C1 chicane wall",
+      "Tube oval 58 x 72 x 60",
+      "Net side north",
+      "M1 maze divider",
+      "Tube cradle 3",
+      "Boulder 3",
+      "C2a chicane wall (window)",
+      "Barrier 1",
+      "Boulder 4",
+      "Net side south",
+      "Boulder 5",
+      "A1 approach wall",
+      "Boulder 2",
+      "Tube cradle 2",
+      "M2 maze divider",
+      "Net side west",
+      "Floor 20 x 20 ft",
+      "M3 maze divider"
+    ]
+  }
 }
