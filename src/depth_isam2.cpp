@@ -236,17 +236,27 @@ bool DepthIsam2::addFrame(const DepthFrame& depth, const OdomSample& odom, const
       for (const auto& [d, j] : near) {
         if (added >= p_.extra_links) break;
         const gtsam::Pose3 rel = estimate_.at<gtsam::Pose3>(X(j)).between(X_init);
-        if (addIcpFactor(j, k, cloud, rel, g)) { ++added; ++stats_.links; }
+        if (addIcpFactor(j, k, cloud, rel, g)) {
+          ++added;
+          ++stats_.links;
+          revisit_edges_.emplace_back(j, k);
+        }
       }
     }
     stats_.icp_ms = ms(ti, Clock::now());
+    latest_cad_accepted_ = false;
     if (cad_prior_) {
       const auto tc = Clock::now();
-      if (addCadPriorFactor(k, cloud, X_init, g)) ++stats_.cad_ok;
-      else ++stats_.cad_rejected;
+      if (addCadPriorFactor(k, cloud, X_init, g)) {
+        ++stats_.cad_ok;
+        latest_cad_accepted_ = true;
+      } else {
+        ++stats_.cad_rejected;
+      }
       stats_.cad_ms = ms(tc, Clock::now());
     }
   }
+  kf.initial_pose = X_init;
   init.insert(X(k), X_init);
   g.emplace_shared<BodyVelocityFactor>(X(k), V(k), R_px4.unrotate(gtsam::Point3(odom.v_world)),
                                       nm::Isotropic::Sigma(3, p_.vel_sigma));
@@ -316,6 +326,7 @@ bool DepthIsam2::addCadPriorFactor(size_t k, const OrganisedCloud& cloud_k, cons
   g.emplace_shared<gtsam::PriorFactor<gtsam::Pose3>>(
       X(k), r->T_world_body,
       nm::Robust::Create(nm::mEstimator::Huber::Create(1.345), nm::Gaussian::Information(info)));
+  cad_anchors_.push_back({k, r->T_world_body, r->inlier_ratio, r->rmse});
   return true;
 }
 
@@ -351,6 +362,40 @@ std::vector<DepthIsam2::KeyframePose> DepthIsam2::keyframePoses() const {
   out.reserve(kfs_.size());
   for (size_t j = 0; j < kfs_.size(); ++j) out.push_back({kfs_[j].stamp, estimate_.at<gtsam::Pose3>(X(j))});
   return out;
+}
+
+DepthIsam2::GraphVizData DepthIsam2::graphVizData() const {
+  GraphVizData v;
+  v.initial_poses.reserve(kfs_.size());
+  v.smoothed_poses.reserve(kfs_.size());
+  for (size_t j = 0; j < kfs_.size(); ++j) {
+    v.initial_poses.push_back(kfs_[j].initial_pose);
+    v.smoothed_poses.push_back(estimate_.at<gtsam::Pose3>(X(j)));
+  }
+  v.revisit_links = revisit_edges_;
+  v.cad_priors = cad_anchors_;
+  v.latest_cad_accepted = latest_cad_accepted_;
+  return v;
+}
+
+DepthIsam2::ClassifiedMap DepthIsam2::globalMapClassified(double voxel, int min_hits, double agree_dist_m) const {
+  ClassifiedMap cm;
+  const auto all = globalMap(voxel, min_hits);
+  if (!cad_prior_) {
+    cm.adapted_new = all;
+    return cm;
+  }
+  cm.cad_matched.reserve(all.size());
+  cm.adapted_new.reserve(all.size());
+  for (const auto& q : all) {
+    Eigen::Vector3d qc, nc;
+    if (cad_prior_->query(q.cast<double>(), qc, nc) && (q.cast<double>() - qc).norm() <= agree_dist_m) {
+      cm.cad_matched.push_back(q);
+    } else {
+      cm.adapted_new.push_back(q);
+    }
+  }
+  return cm;
 }
 
 std::vector<Eigen::Vector3f> DepthIsam2::globalMap(double voxel, int min_hits) const {

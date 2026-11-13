@@ -92,7 +92,9 @@ class Isam2DepthNode : public rclcpp::Node {
     const auto latched = rclcpp::QoS(1).reliable().transient_local();   // RViz joining late still gets the last one
     pub_kf_ = create_publisher<nav_msgs::msg::Path>("~/keyframes", latched);
     pub_map_ = create_publisher<sensor_msgs::msg::PointCloud2>("~/map", latched);
+    pub_adapted_ = create_publisher<sensor_msgs::msg::PointCloud2>("~/adapted_map", latched);
     pub_lm_ = create_publisher<visualization_msgs::msg::MarkerArray>("~/landmarks", latched);
+    pub_prior_updates_ = create_publisher<visualization_msgs::msg::MarkerArray>("~/prior_updates", latched);
     srv_save_ = create_service<std_srvs::srv::Trigger>(
         "~/save_map", [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
                              std::shared_ptr<std_srvs::srv::Trigger::Response> res) {
@@ -250,10 +252,23 @@ class Isam2DepthNode : public rclcpp::Node {
     if (publish_obstacles_ && pub_obst_->get_subscription_count() > 0) publishObstacles(m.header.stamp);
     if (pub_kf_->get_subscription_count() > 0) publishKeyframes(m.header.stamp);
     if (pub_lm_->get_subscription_count() > 0) publishLandmarks(m.header.stamp);
+    if (pub_prior_updates_->get_subscription_count() > 0) publishPriorUpdates(m.header.stamp);
     const double t = rclcpp::Time(m.header.stamp).seconds();
-    if (pub_map_->get_subscription_count() > 0 && (t - last_map_ >= map_period_ || t < last_map_)) {
+    const bool want_map = pub_map_->get_subscription_count() > 0;
+    const bool want_adapted = pub_adapted_->get_subscription_count() > 0;
+    if ((want_map || want_adapted) && (t - last_map_ >= map_period_ || t < last_map_)) {
       last_map_ = t;
-      publishCloud(*pub_map_, est_->globalMap(p_.map_voxel, p_.grid.min_hits), m.header.stamp);
+      if (want_adapted) {
+        const auto cm = est_->globalMapClassified(p_.map_voxel, p_.grid.min_hits, p_.cad_prior.max_corr_dist);
+        publishClassifiedMap(*pub_adapted_, cm, m.header.stamp);
+        if (want_map) {
+          std::vector<Eigen::Vector3f> all = cm.cad_matched;
+          all.insert(all.end(), cm.adapted_new.begin(), cm.adapted_new.end());
+          publishCloud(*pub_map_, all, m.header.stamp);
+        }
+      } else {
+        publishCloud(*pub_map_, est_->globalMap(p_.map_voxel, p_.grid.min_hits), m.header.stamp);
+      }
     }
   }
 
@@ -317,6 +332,113 @@ class Isam2DepthNode : public rclcpp::Node {
       path.poses.push_back(ps);
     }
     pub_kf_->publish(path);
+  }
+
+  void publishClassifiedMap(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>& pub,
+                            const DepthIsam2::ClassifiedMap& cm,
+                            const builtin_interfaces::msg::Time& stamp) {
+    sensor_msgs::msg::PointCloud2 c;
+    c.header.stamp = stamp;
+    c.header.frame_id = world_frame_;
+    sensor_msgs::PointCloud2Modifier mod(c);
+    mod.setPointCloud2FieldsByString(2, "xyz", "rgb");
+    const size_t total = cm.cad_matched.size() + cm.adapted_new.size();
+    mod.resize(total);
+    sensor_msgs::PointCloud2Iterator<float> x(c, "x"), y(c, "y"), z(c, "z");
+    sensor_msgs::PointCloud2Iterator<uint8_t> r(c, "r"), g(c, "g"), b(c, "b");
+    for (const auto& q : cm.cad_matched) {
+      *x = q.x(); *y = q.y(); *z = q.z();
+      *r = 35; *g = 195; *b = 185;   // teal-green: agrees with CAD prior ESDF
+      ++x; ++y; ++z; ++r; ++g; ++b;
+    }
+    for (const auto& q : cm.adapted_new) {
+      *x = q.x(); *y = q.y(); *z = q.z();
+      *r = 255; *g = 140; *b = 25;   // warm amber-orange: newly discovered / shifted structure beyond CAD prior
+      ++x; ++y; ++z; ++r; ++g; ++b;
+    }
+    pub.publish(c);
+  }
+
+  void publishPriorUpdates(const builtin_interfaces::msg::Time& stamp) {
+    const auto gv = est_->graphVizData();
+    visualization_msgs::msg::MarkerArray arr;
+    auto makeLine = [&](int id, const std::string& ns, float width, float cr, float cg, float cb, float ca) {
+      visualization_msgs::msg::Marker m;
+      m.header.stamp = stamp;
+      m.header.frame_id = world_frame_;
+      m.ns = ns;
+      m.id = id;
+      m.type = visualization_msgs::msg::Marker::LINE_LIST;
+      m.action = visualization_msgs::msg::Marker::ADD;
+      m.pose.orientation.w = 1.0;
+      m.scale.x = width;
+      m.color.r = cr; m.color.g = cg; m.color.b = cb; m.color.a = ca;
+      return m;
+    };
+    auto toPt = [](const gtsam::Point3& p) {
+      geometry_msgs::msg::Point g;
+      g.x = p.x(); g.y = p.y(); g.z = p.z();
+      return g;
+    };
+
+    // 1. Keyframe smoothed-pose trajectory strip + initial-to-smoothed correction springs
+    visualization_msgs::msg::Marker kf_strip;
+    kf_strip.header.stamp = stamp;
+    kf_strip.header.frame_id = world_frame_;
+    kf_strip.ns = "smoothed_keyframes";
+    kf_strip.id = 0;
+    kf_strip.type = visualization_msgs::msg::Marker::LINE_STRIP;
+    kf_strip.action = visualization_msgs::msg::Marker::ADD;
+    kf_strip.pose.orientation.w = 1.0;
+    kf_strip.scale.x = 0.012f;
+    kf_strip.color.r = 0.05f; kf_strip.color.g = 0.68f; kf_strip.color.b = 0.96f; kf_strip.color.a = 0.90f;
+
+    auto shifts = makeLine(1, "smoothing_shifts", 0.008f, 0.98f, 0.72f, 0.12f, 0.85f);
+    for (size_t i = 0; i < gv.smoothed_poses.size(); ++i) {
+      const auto ps = gv.smoothed_poses[i].translation();
+      const auto pi = gv.initial_poses[i].translation();
+      kf_strip.points.push_back(toPt(ps));
+      if ((ps - pi).norm() > 0.004) {
+        shifts.points.push_back(toPt(pi));
+        shifts.points.push_back(toPt(ps));
+      }
+    }
+    arr.markers.push_back(std::move(kf_strip));
+    arr.markers.push_back(std::move(shifts));
+
+    // 2. Accepted CAD-prior Pose3 anchors -> current smoothed keyframe pose X(k)
+    auto cad_lines = makeLine(2, "cad_prior_anchors", 0.014f, 0.10f, 0.85f, 0.42f, 0.92f);
+    visualization_msgs::msg::Marker cad_pts;
+    cad_pts.header.stamp = stamp;
+    cad_pts.header.frame_id = world_frame_;
+    cad_pts.ns = "cad_anchor_points";
+    cad_pts.id = 3;
+    cad_pts.type = visualization_msgs::msg::Marker::POINTS;
+    cad_pts.action = visualization_msgs::msg::Marker::ADD;
+    cad_pts.pose.orientation.w = 1.0;
+    cad_pts.scale.x = cad_pts.scale.y = 0.045f;
+    cad_pts.color.r = 0.10f; cad_pts.color.g = 0.88f; cad_pts.color.b = 0.45f; cad_pts.color.a = 0.95f;
+    for (const auto& a : gv.cad_priors) {
+      if (a.keyframe >= gv.smoothed_poses.size()) continue;
+      const auto pa = a.T_prior.translation();
+      const auto ps = gv.smoothed_poses[a.keyframe].translation();
+      cad_pts.points.push_back(toPt(pa));
+      cad_lines.points.push_back(toPt(pa));
+      cad_lines.points.push_back(toPt(ps));
+    }
+    arr.markers.push_back(std::move(cad_lines));
+    arr.markers.push_back(std::move(cad_pts));
+
+    // 3. Revisit loop-closure ICP edges X(j) <-> X(k)
+    auto loops = makeLine(4, "revisit_closures", 0.009f, 0.12f, 0.78f, 0.92f, 0.70f);
+    for (const auto& [j, k] : gv.revisit_links) {
+      if (j < gv.smoothed_poses.size() && k < gv.smoothed_poses.size()) {
+        loops.points.push_back(toPt(gv.smoothed_poses[j].translation()));
+        loops.points.push_back(toPt(gv.smoothed_poses[k].translation()));
+      }
+    }
+    arr.markers.push_back(std::move(loops));
+    pub_prior_updates_->publish(arr);
   }
 
   void publishLandmarks(const builtin_interfaces::msg::Time& stamp) {
@@ -428,9 +550,9 @@ class Isam2DepthNode : public rclcpp::Node {
   rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr sub_info_;
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr sub_depth_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom_, pub_vio_icp_odom_;
-  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_obst_, pub_map_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_obst_, pub_map_, pub_adapted_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_kf_;
-  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_lm_;
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_lm_, pub_prior_updates_;
   rclcpp::TimerBase::SharedPtr timer_;
 };
 

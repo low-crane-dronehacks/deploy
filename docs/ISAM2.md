@@ -95,6 +95,8 @@ cmake -S src -B build && cmake --build build && ./build/test_depth_isam2
   the paper's output, the whole trajectory re-estimated; past poses move when ICP or revisit links correct them.
 - `~/map` (PointCloud2, latched): the whole corrected map. Every keyframe's 5 cm cloud is placed at its smoothed
   pose; cells with >= `grid_min_hits` points are kept. Rebuilt every `map_publish_period` s (default 1).
+- `~/adapted_map` (PointCloud2 `xyz` + `rgb`, latched): global smoothed map classified against `CadPriorEsdf` (teal = agrees with CAD prior within `0.14 m`, warm amber = newly discovered / shifted as-built surfaces beyond the CAD prior).
+- `~/prior_updates` (visualization_msgs/MarkerArray, latched): live factor-graph belief & prior adaptation per keyframe (`smoothed_keyframes`, `smoothing_shifts` initial-to-posterior correction vectors, `cad_prior_anchors` + `cad_anchor_points`, and `revisit_closures`).
 - `~/landmarks` (visualization_msgs/MarkerArray, latched): estimated landmarks, sphere + id. Empty until something
   feeds landmark observations (e.g. a pad-ring detector); the graph supports them, the node does not produce any.
 

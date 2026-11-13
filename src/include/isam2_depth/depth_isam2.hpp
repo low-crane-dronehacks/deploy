@@ -126,6 +126,31 @@ class DepthIsam2 {
     gtsam::Pose3 T_world_body;   // world NED <- body FRD, current smoothed value
   };
   std::vector<KeyframePose> keyframePoses() const;
+
+  // Graph & CAD-prior adaptation snapshot for live 3D visualisation: shows how each keyframe's belief
+  // evolves from its initial prediction as new depth ICP, revisit loop closures, and CAD prior anchors arrive.
+  struct CadPriorAnchor {
+    size_t keyframe = 0;
+    gtsam::Pose3 T_prior;       // CAD-registered body pose anchor on X(k)
+    double inlier_ratio = 0.0;
+    double rmse = 0.0;
+  };
+  struct GraphVizData {
+    std::vector<gtsam::Pose3> initial_poses;   // X_init when keyframe k first entered the graph
+    std::vector<gtsam::Pose3> smoothed_poses;  // current iSAM2 smoothed estimate X(k)
+    std::vector<std::pair<size_t, size_t>> revisit_links;  // accepted loop-closure ICP edges (j, k)
+    std::vector<CadPriorAnchor> cad_priors;    // accepted CAD-prior Pose3 anchors on X(k)
+    bool latest_cad_accepted = false;
+  };
+  GraphVizData graphVizData() const;
+
+  // Map classified against the CAD prior ESDF: splits the current smoothed global map into voxels that
+  // agree with the CAD prior (<= agree_dist_m) vs. newly discovered / shifted real-world structure (> agree_dist_m).
+  struct ClassifiedMap {
+    std::vector<Eigen::Vector3f> cad_matched;
+    std::vector<Eigen::Vector3f> adapted_new;
+  };
+  ClassifiedMap globalMapClassified(double voxel, int min_hits, double agree_dist_m = 0.14) const;
   // The whole corrected map: every keyframe's downsampled cloud placed at its CURRENT smoothed pose, merged into
   // `voxel` cells; a cell is kept if at least `min_hits` keyframe points fall in it. Voxel centres, world NED.
   // Unlike latest().distance (map_radius / grid window around the vehicle), this covers everything seen.
@@ -136,6 +161,7 @@ class DepthIsam2 {
   struct Keyframe {
     double stamp;
     OdomSample odom;
+    gtsam::Pose3 initial_pose;                // X_init when first inserted into iSAM2
     std::optional<OrganisedCloud> cloud;      // dropped after keep_dense newer keyframes
     std::vector<Eigen::Vector3f> map_points;  // body FRD, voxel-downsampled
   };
@@ -154,6 +180,9 @@ class DepthIsam2 {
   gtsam::ISAM2 isam_;
   gtsam::Values estimate_;
   std::vector<Keyframe> kfs_;
+  std::vector<std::pair<size_t, size_t>> revisit_edges_;
+  std::vector<CadPriorAnchor> cad_anchors_;
+  bool latest_cad_accepted_ = false;
   MppiInput latest_;
   Stats stats_;
 };
