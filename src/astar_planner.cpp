@@ -32,13 +32,51 @@ Eigen::Vector2d AStarPlanner::posOf(int cell) const {
 }
 
 void AStarPlanner::rebuildClearance() {
-  clr_.assign(static_cast<std::size_t>(n_) * n_, 0.0);
+  rebuildClearance(nullptr, 0.04);
+}
+
+void AStarPlanner::rebuildClearance(const isam2_depth::DistanceGrid* adapted_grid_map, double voxel_half_diag_m) {
+  const std::size_t total = static_cast<std::size_t>(n_) * n_;
+  clr_.assign(total, 0.0);
+  opt_z_.assign(total, cfg_.flight_z_ned);
   const double net = cfg_.arena_half_m - cfg_.net_margin_m;
   for (int c = 0; c < n_ * n_; ++c) {
     const Eigen::Vector2d p = posOf(c);
+    const Eigen::Vector3d p3(p.x(), p.y(), cfg_.flight_z_ned);
     const double d_net = net - std::max(std::abs(p.x()), std::abs(p.y()));   // exact inside a square
-    const double d_map = map_ ? map_->clearance(Eigen::Vector3d(p.x(), p.y(), cfg_.flight_z_ned)) : 1e9;
-    clr_[static_cast<std::size_t>(c)] = std::min(d_net, d_map);
+    double d_obs = map_ ? map_->clearance(p3) : 1e9;
+    double best_z = cfg_.flight_z_ned;
+    if (adapted_grid_map && adapted_grid_map->inside(p3)) {
+      const auto query_adapted = [&](double z_test) {
+        const Eigen::Vector3d q(p.x(), p.y(), z_test);
+        if (!adapted_grid_map->inside(q)) return 0.0;
+        double d = std::max(0.0, static_cast<double>(adapted_grid_map->distance(q)) - voxel_half_diag_m);
+        if (map_) {
+          for (const auto& blk : map_->blockedCorridors()) {
+            d = std::min(d, (q - blk.center_ned).norm() - blk.radius_m);
+          }
+        }
+        return d;
+      };
+      d_obs = query_adapted(cfg_.flight_z_ned);
+      // If nominal flight altitude is tight/blocked (e.g. a physical window cut higher than the CAD window),
+      // search safe flight altitudes z_ned in [-1.42, -0.55] m with a light altitude-deviation tie-breaker so
+      // open corridors stay at flight_z_ned while elevated window centers are chosen at maximum 3D clearance!
+      if (d_obs < cfg_.clearance_m + 0.06) {
+        double best_score = d_obs;
+        for (double z_test = -1.42; z_test <= -0.55 + 1e-6; z_test += 0.04) {
+          const double d_z = query_adapted(z_test);
+          const double score = d_z - 0.018 * std::abs(z_test - cfg_.flight_z_ned);
+          if (score > best_score && d_z > d_obs + 0.015) {
+            best_score = score;
+            d_obs = d_z;
+            best_z = z_test;
+          }
+        }
+      }
+    }
+    clr_[static_cast<std::size_t>(c)] = std::min(d_net, d_obs);
+    opt_z_[static_cast<std::size_t>(c)] = best_z;
   }
 }
 
@@ -81,10 +119,13 @@ std::vector<int> AStarPlanner::searchRegion(int start, const std::function<bool(
       if (mi < 0 || mj < 0 || mi >= n_ || mj >= n_) continue;
       const int m = mi * n_ + mj;
       if (closed[static_cast<std::size_t>(m)] || !allowed(m)) continue;
-      // Prefer the middle of corridors (spoof_px4_depth.py astar()).
+      // Prefer the middle of corridors and apply a strong soft barrier below 0.30 m so tight openings (windows,
+      // narrow gates) are threaded dead-center instead of grazing a jamb to shave a few cm of path length.
       const double cm = clr_[static_cast<std::size_t>(m)];
+      const double tight = std::max(0.0, 0.30 - cm);
       const double cost = g[static_cast<std::size_t>(c)] +
-                          kW[k] * (1.0 + cfg_.centre_weight * std::max(0.0, cfg_.centre_dist_m - cm));
+                          kW[k] * (1.0 + cfg_.centre_weight * std::max(0.0, cfg_.centre_dist_m - cm) +
+                                   28.0 * tight * tight);
       if (cost < g[static_cast<std::size_t>(m)]) {
         g[static_cast<std::size_t>(m)] = cost;
         parent[static_cast<std::size_t>(m)] = c;
@@ -219,10 +260,21 @@ AStarPlanResult AStarPlanner::plan(const Eigen::Vector3d& start_map, const std::
     if (goal.has_segment && goal.normal.norm() > 1e-9) {
       const Eigen::Vector2d next = (gi + 1 < goals.size()) ? goals[gi + 1].center.head<2>() : goal.center.head<2>();
       const Eigen::Vector2d* next_p = (gi + 1 < goals.size()) ? &next : nullptr;
-      // Deep band first (margin for MPPI rounding the corner), then the whole band, then fallback clearance.
+      // Deep band first (margin for MPPI rounding the corner), then the whole band, then fallback clearance,
+      // then snap to the nearest clear opening if the gate shifted physically in the real arena.
       seg = searchGate(cur, goal, std::max(d_min, d_max - 0.05), d_max + 0.05, r_req, r_fb, next_p, &res.expanded);
       if (seg.empty()) seg = searchGate(cur, goal, d_min, d_max + 0.05, r_req, r_fb, next_p, &res.expanded);
       if (seg.empty()) seg = searchGate(cur, goal, d_min, d_max + 0.05, r_fb, -1.0, next_p, &res.expanded);
+      if (seg.empty()) {
+        const Eigen::Vector2d target_xy = goal.center.head<2>() + goal.normal.normalized() * d_min;
+        const int exact = cellOf(target_xy);
+        const int g_req = snap(exact, r_req);
+        if (g_req >= 0) seg = search(cur, g_req, r_req, &res.expanded);
+        if (seg.empty()) {
+          const int g_fb = snap(exact, r_fb);
+          if (g_fb >= 0) seg = search(cur, g_fb, r_fb, &res.expanded);
+        }
+      }
     } else {
       const int exact = cellOf(goal.center.head<2>());
       seg = search(cur, exact, r_req, &res.expanded, r_fb, cfg_.snap_radius_m);
@@ -383,7 +435,56 @@ AStarPlanResult AStarPlanner::plan(const Eigen::Vector3d& start_map, const std::
     v[i] = std::min(v[i], std::sqrt(v[i + 1] * v[i + 1] + 2.0 * cfg_.acc_m_s2 * (s[i + 1] - s[i])));
   }
 
-  // 6. Timed PlannedPath.
+  // 6. Timed PlannedPath (smooth z_ned profile when 3D adapted clearance opens an elevated window).
+  std::vector<double> z_prof(n, cfg_.flight_z_ned);
+  if (opt_z_.size() == clr_.size()) {
+    std::vector<double> z_raw(n, cfg_.flight_z_ned);
+    bool has_alt_dev = false;
+    for (std::size_t i = 0; i < n; ++i) {
+      z_raw[i] = opt_z_[static_cast<std::size_t>(cellOf(xy[i]))];
+      if (std::abs(z_raw[i] - cfg_.flight_z_ned) > 1e-3) has_alt_dev = true;
+    }
+    if (has_alt_dev || std::abs(start_map.z() - cfg_.flight_z_ned) > 0.05) {
+      z_raw.front() = std::clamp(start_map.z(), -1.45, -0.45);
+      // Widen elevated window segments along arc length (+-0.60 m = 30 samples) so the drone climbs cleanly
+      // before reaching the window sill and descends only after clearing the window frame!
+      std::vector<double> z_dil = z_raw;
+      const int hw_dil = 30;
+      for (std::size_t i = 0; i < n; ++i) {
+        double z_pick = z_raw[i];
+        for (int d = -hw_dil; d <= hw_dil; ++d) {
+          const long m = static_cast<long>(i) + d;
+          if (m < 0 || m >= static_cast<long>(n)) continue;
+          if (std::abs(z_raw[static_cast<std::size_t>(m)] - cfg_.flight_z_ned) >
+              std::abs(z_pick - cfg_.flight_z_ned)) {
+            z_pick = z_raw[static_cast<std::size_t>(m)];
+          }
+        }
+        z_dil[i] = z_pick;
+      }
+      z_dil.front() = z_raw.front();
+      z_dil.back() = cfg_.flight_z_ned;
+      // Two-pass box smooth (~0.50 m window) for C1-smooth vertical velocity reference
+      std::vector<double> z_tmp = z_dil;
+      const int hw_sm = 14;
+      for (int pass = 0; pass < 2; ++pass) {
+        for (std::size_t i = 1; i + 1 < n; ++i) {
+          double sum = 0.0;
+          int cnt = 0;
+          for (int d = -hw_sm; d <= hw_sm; ++d) {
+            const long m = std::clamp<long>(static_cast<long>(i) + d, 0, static_cast<long>(n) - 1);
+            sum += z_tmp[static_cast<std::size_t>(m)];
+            ++cnt;
+          }
+          z_prof[i] = sum / std::max(1, cnt);
+        }
+        z_prof.front() = z_dil.front();
+        z_prof.back() = z_dil.back();
+        z_tmp = z_prof;
+      }
+    }
+  }
+
   PlannedPath& out = res.path;
   out.frame_id = "map";
   out.points.resize(n);
@@ -391,11 +492,15 @@ AStarPlanResult AStarPlanner::plan(const Eigen::Vector3d& start_map, const std::
   res.min_clearance_m = std::numeric_limits<double>::infinity();
   for (std::size_t i = 0; i < n; ++i) {
     if (i > 0) t += 2.0 * (s[i] - s[i - 1]) / std::max(0.02, v[i - 1] + v[i]);
-    const Eigen::Vector2d d = xy[std::min(n - 1, i + 1)] - xy[i > 0 ? i - 1 : 0];
+    const std::size_t i0 = i > 0 ? i - 1 : 0;
+    const std::size_t i1 = std::min(n - 1, i + 1);
+    const Eigen::Vector2d d = xy[i1] - xy[i0];
     const Eigen::Vector2d tan = d.norm() > 1e-9 ? Eigen::Vector2d(d / d.norm()) : Eigen::Vector2d(1.0, 0.0);
+    const double ds_span = std::max(1e-6, s[i1] - s[i0]);
+    const double dz_ds = (z_prof[i1] - z_prof[i0]) / ds_span;
     PathPoint& p = out.points[i];
-    p.pos = Eigen::Vector3d(xy[i].x(), xy[i].y(), cfg_.flight_z_ned);
-    p.vel = Eigen::Vector3d(tan.x(), tan.y(), 0.0) * v[i];
+    p.pos = Eigen::Vector3d(xy[i].x(), xy[i].y(), z_prof[i]);
+    p.vel = Eigen::Vector3d(tan.x() * v[i], tan.y() * v[i], std::clamp(dz_ds * v[i], -0.8, 0.8));
     p.yaw_rad = std::atan2(tan.y(), tan.x());
     p.s_m = s[i];
     p.t_s = t;

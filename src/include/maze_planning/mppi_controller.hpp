@@ -75,6 +75,10 @@ struct MPPIConfig {
   double lethal_distance_m{0.21};   // hard collision radius (m)
   double drone_radius_m{0.21};      // physical collision radius for FMEA Pillar Dead-Center check
   double stall_cost_threshold{850.0};
+  // When true and an active iSAM2 DistanceGrid is present (built from PriorEsdfMap = retained CAD priors U
+  // new/shifted obstacles, with stale CAD priors carved away), evaluate obstacle clearance inside the grid from
+  // the iSAM2 DistanceGrid directly instead of clamping against un-carved GroundTruthMap static walls.
+  bool trust_isam2_prior_grid{false};
 
   // Visualization: keep this many sampled rollouts (evenly strided over the K samples) per cycle so a node
   // can publish them. 0 = keep none (no extra cost in the rollout loop).

@@ -132,6 +132,10 @@ class Isam2DepthNode : public rclcpp::Node {
     p_.icp.info_deflation = declare_parameter("icp_info_deflation", p_.icp.info_deflation);
     p_.grid.resolution = declare_parameter("grid_resolution", p_.grid.resolution);
     p_.grid.min_hits = static_cast<int>(declare_parameter("grid_min_hits", static_cast<int64_t>(p_.grid.min_hits)));
+    p_.prior_map.pixel_stride =
+        static_cast<int>(declare_parameter("prior_pixel_stride", static_cast<int64_t>(p_.prior_map.pixel_stride)));
+    p_.prior_map.l_free =
+        static_cast<float>(declare_parameter("prior_l_free", static_cast<double>(p_.prior_map.l_free)));
   }
 
   double now_s() { return get_clock()->now().seconds(); }

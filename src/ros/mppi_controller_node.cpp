@@ -90,9 +90,9 @@ class MPPIControllerNode : public rclcpp::Node {
     odom_frame_ = declare_parameter<std::string>("odom_frame", "odom_ned");
     const std::string cloud_topic = declare_parameter<std::string>("obstacle_cloud_topic", "/oak/points/clamped");
     const std::string isam2_topic =
-        declare_parameter<std::string>("isam2_obstacles_topic", "/isam2_depth_node/obstacles");
-    isam2_grid_timeout_s_ = declare_parameter<double>("isam2_grid_timeout_s", 1.0);
-    isam2_grid_params_.resolution = declare_parameter<double>("isam2_grid_resolution", 0.1);
+        declare_parameter<std::string>("isam2_obstacles_topic", "/isam2_depth/obstacles");
+    isam2_grid_timeout_s_ = declare_parameter<double>("isam2_grid_timeout_s", 2.5);
+    isam2_grid_params_.resolution = declare_parameter<double>("isam2_grid_resolution", 0.08);
     viz_every_n_ = std::max<int64_t>(1, declare_parameter<int64_t>("viz_candidates_every_n", 5));
 
     gt_map_ = std::make_shared<GroundTruthMap>();
@@ -122,6 +122,7 @@ class MPPIControllerNode : public rclcpp::Node {
     // hard collision radius.
     mcfg.safe_distance_m = declare_parameter<double>("mppi_safe_distance_m", mcfg.safe_distance_m);
     mcfg.lethal_distance_m = declare_parameter<double>("mppi_lethal_distance_m", mcfg.lethal_distance_m);
+    mcfg.trust_isam2_prior_grid = declare_parameter<bool>("trust_isam2_prior_grid", mcfg.trust_isam2_prior_grid);
     if (mcfg.safe_distance_m < mcfg.lethal_distance_m) {
       throw std::runtime_error("mppi_controller_node: mppi_safe_distance_m must be >= mppi_lethal_distance_m");
     }
@@ -207,8 +208,11 @@ class MPPIControllerNode : public rclcpp::Node {
     for (const auto& p : pts) ptsf.push_back(p.cast<float>());
     isam2_depth::GridParams gp = isam2_grid_params_;
     gp.min_hits = 1;   // the input is already occupied voxel centres
-    mppi_->setLocalDistanceGrid(
-        std::make_shared<const isam2_depth::DistanceGrid>(ptsf, state_odom_.pos_odom, gp));
+    auto grid = std::make_shared<const isam2_depth::DistanceGrid>(ptsf, state_odom_.pos_odom, gp);
+    mppi_->setLocalDistanceGrid(grid);
+    if (map_frame_ == odom_frame_) {
+      costmap_->setIsam2DistanceGrid(grid);
+    }
     last_isam2_grid_s_ = now().seconds();
     has_isam2_grid_ = true;
   }
@@ -314,6 +318,7 @@ class MPPIControllerNode : public rclcpp::Node {
     if (has_isam2_grid_ && now().seconds() - last_isam2_grid_s_ > isam2_grid_timeout_s_) {
       RCLCPP_WARN(get_logger(), "iSAM2 obstacle grid is stale (> %.1f s); dropping it", isam2_grid_timeout_s_);
       mppi_->setLocalDistanceGrid(nullptr);
+      costmap_->setIsam2DistanceGrid(nullptr);
       has_isam2_grid_ = false;
     }
     if (local_ref_odom_.empty()) return;

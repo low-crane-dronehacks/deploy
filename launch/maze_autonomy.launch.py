@@ -267,7 +267,7 @@ def _setup(context):
                 f"mppi_safe_distance_m:={LaunchConfiguration('mppi_safe_distance_m').perform(context)}",
                 "-p",
                 # "''" = empty string; a bare "name:=" makes rcl fail to parse the arguments (node aborts)
-                f"isam2_obstacles_topic:={'/isam2_depth_node/obstacles' if isam2 else repr('')}",
+                f"isam2_obstacles_topic:={'/isam2_depth/obstacles' if isam2 else repr('')}",
             ]
             + frames,
             cwd=ROOT,

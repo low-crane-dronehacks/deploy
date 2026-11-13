@@ -69,6 +69,9 @@ MPPIControl MPPIController::clampControl(const MPPIControl& u) const {
 }
 
 double MPPIController::queryClearanceOdom(const Eigen::Vector3d& p_odom) const {
+  if (cfg_.trust_isam2_prior_grid && active_grid_ && active_grid_->inside(p_odom)) {
+    return std::max(0.0, static_cast<double>(active_grid_->distance(p_odom)) - 0.015);
+  }
   const Eigen::Vector3d p_map = T_map_odom_.apply(p_odom);
   double d = costmap_ ? costmap_->clearance(p_map) : 2.5;
   if (active_grid_ && active_grid_->inside(p_odom)) {
@@ -78,6 +81,9 @@ double MPPIController::queryClearanceOdom(const Eigen::Vector3d& p_odom) const {
 }
 
 double MPPIController::queryStaticClearanceOdom(const Eigen::Vector3d& p_odom) const {
+  if (cfg_.trust_isam2_prior_grid && active_grid_ && active_grid_->inside(p_odom)) {
+    return std::max(0.0, static_cast<double>(active_grid_->distance(p_odom)) - 0.015);
+  }
   const Eigen::Vector3d p_map = T_map_odom_.apply(p_odom);
   return costmap_ ? costmap_->groundTruthMap().clearance(p_map) : 2.5;
 }
@@ -114,7 +120,7 @@ bool MPPIController::checkCorridorBlockedAhead(
   const double dist = std::hypot(diff.x(), diff.y());
   if (dist < 0.25) return false;
 
-  const Eigen::Vector3d fwd(diff.x() / dist, diff.y() / dist, 0.0);
+  const Eigen::Vector3d fwd(diff.x() / dist, diff.y() / dist, diff.z() / dist);
   const Eigen::Vector3d right(-fwd.y(), fwd.x(), 0.0);
 
   // Check if centerline ahead has a lethal obstacle AND both left/right lateral detours (<0.68m)
@@ -329,7 +335,9 @@ TrajectorySetpointCmd MPPIController::computeCommand(
         // Subtract half a dynamic voxel + reach buffer on dynamic obstacles so discrete 8 cm voxels
         // and MPPI's 0.21 m lethal radius keep prop tips (> 0.25 m) clear of unmodelled objects.
         const double d_static = queryStaticClearanceOdom(pos);
-        const double dyn_margin = costmap_ ? (0.5 * costmap_->config().resolution_m + 0.01) : 0.05;
+        const double dyn_margin = (cfg_.trust_isam2_prior_grid && active_grid_)
+                                      ? (0.5 * active_grid_->resolution())
+                                      : (costmap_ ? (0.5 * costmap_->config().resolution_m + 0.01) : 0.05);
         const double d_dyn = std::max(0.0, queryDynamicClearanceOdom(pos) - dyn_margin);
         const double d_obs = std::min(d_static, d_dyn);
         if (d_obs <= cfg_.lethal_distance_m) {
@@ -449,8 +457,31 @@ TrajectorySetpointCmd MPPIController::computeCommand(
   // 6. Check FMEA Pillar Dead-Center / Narrow Corridor Blockage
   Eigen::Vector3d blocked_obs_map = Eigen::Vector3d::Zero();
   const PathPoint& target_ref = horizon_refs_[std::min(T - 1, 5)];
-  const bool corridor_blocked =
+  bool corridor_blocked =
       checkCorridorBlockedAhead(state_odom, target_ref, blocked_obs_map);
+  if (!corridor_blocked && cfg_.trust_isam2_prior_grid && active_grid_) {
+    // Also inspect the actual curved global reference horizon up to 1.6 s ahead on the iSAM2 grid
+    // so shifted walls blocking an upcoming turn trigger a proactive A* replan before corner entry!
+    for (int t = 2; t < T; ++t) {
+      const Eigen::Vector3d& ref_p = horizon_refs_[t].pos;
+      if ((ref_p.head<2>() - state_odom.pos_odom.head<2>()).norm() < 0.30) continue;
+      if (queryClearanceOdom(ref_p) < cfg_.drone_radius_m) {
+        const Eigen::Vector3d right(-path_frames_[t](1, 0), path_frames_[t](0, 0), 0.0);
+        bool detour_ok = false;
+        for (double lat : {-0.45, -0.30, 0.30, 0.45}) {
+          if (queryClearanceOdom(ref_p + right * lat) >= cfg_.lethal_distance_m) {
+            detour_ok = true;
+            break;
+          }
+        }
+        if (!detour_ok) {
+          corridor_blocked = true;
+          blocked_obs_map = T_map_odom_.apply(ref_p);
+          break;
+        }
+      }
+    }
+  }
   if (corridor_blocked || min_cost > cfg_.stall_cost_threshold) {
     ++consecutive_stall_ticks_;
   } else {

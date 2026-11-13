@@ -26,6 +26,7 @@
 #include <string>
 #include <vector>
 
+#include "isam2_depth/distance_grid.hpp"
 #include "maze_planning/groundtruth_map.hpp"
 #include "maze_planning/types.hpp"
 
@@ -86,7 +87,10 @@ class AStarPlanner {
   explicit AStarPlanner(const AStarConfig& cfg, std::shared_ptr<const GroundTruthMap> map);
 
   // Recompute the clearance grid (after the map changes, e.g. GroundTruthMap::markCorridorBlocked).
+  // When an estimator obstacle grid (e.g. iSAM2 PriorEsdfMap DistanceGrid in map frame) is supplied, cells inside
+  // it use its live adapted clearance (including carved-away stale CAD walls and newly discovered real obstacles).
   void rebuildClearance();
+  void rebuildClearance(const isam2_depth::DistanceGrid* adapted_grid_map, double voxel_half_diag_m = 0.04);
 
   // start -> goals in order. start_speed_m_s seeds the speed profile (0 on the ground / at a hover).
   AStarPlanResult plan(const Eigen::Vector3d& start_map, const std::vector<PlanGoal>& goals,
@@ -119,7 +123,8 @@ class AStarPlanner {
   AStarConfig cfg_;
   std::shared_ptr<const GroundTruthMap> map_;
   int n_{0};
-  std::vector<double> clr_;   // clearance per cell (m), row-major [i * n + j], i along x (north)
+  std::vector<double> clr_;     // clearance per cell (m), row-major [i * n + j], i along x (north)
+  std::vector<double> opt_z_;   // best local z_ned per cell (m) when 3D adapted grid reveals an elevated opening
 };
 
 }  // namespace maze_planning

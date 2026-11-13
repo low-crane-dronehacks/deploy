@@ -40,6 +40,9 @@ class AStarPlannerNode : public rclcpp::Node {
     odom_frame_ = declare_parameter<std::string>("odom_frame", "odom_ned");
     replan_min_interval_s_ = declare_parameter<double>("replan_min_interval_s", 1.5);
     block_radius_m_ = declare_parameter<double>("block_radius_m", 0.20);
+    const std::string isam2_priors_topic = declare_parameter<std::string>("isam2_priors_topic", "");
+    const std::string isam2_new_obst_topic = declare_parameter<std::string>("isam2_new_obstacles_topic", "");
+    isam2_voxel_res_m_ = declare_parameter<double>("isam2_voxel_resolution_m", 0.08);
 
     AStarConfig cfg{};
     cfg.resolution_m = declare_parameter<double>("resolution_m", cfg.resolution_m);
@@ -92,15 +95,28 @@ class AStarPlannerNode : public rclcpp::Node {
     pub_map_cloud_ = create_publisher<sensor_msgs::msg::PointCloud2>("/viz/groundtruth_map_cloud", latched);
     publishGroundTruthCloud();
 
+    current_pos_map_ = Eigen::Vector3d(gt_map_->launchMarkNed().x(), gt_map_->launchMarkNed().y(), cfg.flight_z_ned);
+    planAndPublish("initial plan from the launch mark", 0.0);
+
     sub_odom_ = create_subscription<nav_msgs::msg::Odometry>(
         "/odometry/local", rclcpp::SensorDataQoS(),
         [this](const nav_msgs::msg::Odometry::SharedPtr m) { onOdometry(*m); });
     sub_replan_ = create_subscription<geometry_msgs::msg::PointStamped>(
         "/plan/replan_blocked_corridor", 10,
         [this](const geometry_msgs::msg::PointStamped::SharedPtr m) { onBlocked(*m); });
-
-    current_pos_map_ = Eigen::Vector3d(gt_map_->launchMarkNed().x(), gt_map_->launchMarkNed().y(), cfg.flight_z_ned);
-    planAndPublish("initial plan from the launch mark", 0.0);
+    if (!isam2_priors_topic.empty()) {
+      sub_isam2_priors_ = create_subscription<sensor_msgs::msg::PointCloud2>(
+          isam2_priors_topic, latched,
+          [this](const sensor_msgs::msg::PointCloud2::SharedPtr m) { onIsam2Cloud(*m, isam2_priors_map_); });
+    }
+    if (!isam2_new_obst_topic.empty()) {
+      sub_isam2_new_obst_ = create_subscription<sensor_msgs::msg::PointCloud2>(
+          isam2_new_obst_topic, latched,
+          [this](const sensor_msgs::msg::PointCloud2::SharedPtr m) {
+            onIsam2Cloud(*m, isam2_new_obst_map_);
+            has_isam2_updates_ = true;
+          });
+    }
   }
 
  private:
@@ -153,16 +169,50 @@ class AStarPlannerNode : public rclcpp::Node {
                            map_frame_.c_str(), odom_frame_.c_str());
     }
     current_pos_map_ = T_map_odom.apply(k.pos_odom);
+    has_odom_ = true;
     speed_ = k.vel_odom.head<2>().norm();
     progress_.update(current_pos_map_);
   }
 
+  void onIsam2Cloud(const sensor_msgs::msg::PointCloud2& m, std::vector<Eigen::Vector3f>& dst) {
+    SE3Transform T_map_cloud{};
+    if (m.header.frame_id != map_frame_ &&
+        !ros_conv::lookupSE3(tf_buffer_, map_frame_, m.header.frame_id, T_map_cloud)) {
+      T_map_cloud = SE3Transform{};
+    }
+    dst.clear();
+    dst.reserve(static_cast<std::size_t>(m.width) * m.height);
+    sensor_msgs::PointCloud2ConstIterator<float> ix(m, "x"), iy(m, "y"), iz(m, "z");
+    for (; ix != ix.end(); ++ix, ++iy, ++iz) {
+      if (!std::isfinite(*ix) || !std::isfinite(*iy) || !std::isfinite(*iz)) continue;
+      dst.push_back(T_map_cloud.apply(Eigen::Vector3d(*ix, *iy, *iz)).cast<float>());
+    }
+  }
+
   void onBlocked(const geometry_msgs::msg::PointStamped& m) {
+    if (!has_odom_) return;
     const double now_s = now().seconds();
     if (now_s - last_replan_s_ < replan_min_interval_s_) return;
     last_replan_s_ = now_s;
-    gt_map_->markCorridorBlocked(Eigen::Vector3d(m.point.x, m.point.y, m.point.z), block_radius_m_);
-    planner_->rebuildClearance();
+    if (has_isam2_updates_ && (!isam2_priors_map_.empty() || !isam2_new_obst_map_.empty())) {
+      // iSAM2's PriorEsdfMap already contains the exact physical obstacle voxels; only add a small local nudge
+      // (<= 0.08 m) if needed rather than a huge blind 0.38 m sphere that seals adjacent narrow corridors!
+      gt_map_->markCorridorBlocked(Eigen::Vector3d(m.point.x, m.point.y, m.point.z),
+                                   std::min(block_radius_m_, 0.08));
+      std::vector<Eigen::Vector3f> active = isam2_priors_map_;
+      active.insert(active.end(), isam2_new_obst_map_.begin(), isam2_new_obst_map_.end());
+      isam2_depth::GridParams gp{};
+      gp.resolution = isam2_voxel_res_m_;
+      gp.half_extent = Eigen::Vector3d(3.2, 3.2, 1.5);
+      gp.min_hits = 1;
+      gp.max_distance = 3.0f;
+      const isam2_depth::DistanceGrid adapted_grid(
+          active, Eigen::Vector3d(0.0, 0.0, -0.95), gp);
+      planner_->rebuildClearance(&adapted_grid, 0.0);
+    } else {
+      gt_map_->markCorridorBlocked(Eigen::Vector3d(m.point.x, m.point.y, m.point.z), block_radius_m_);
+      planner_->rebuildClearance();
+    }
     planAndPublish("replan around blocked corridor", speed_);
   }
 
@@ -171,6 +221,11 @@ class AStarPlannerNode : public rclcpp::Node {
   std::string map_frame_, odom_frame_;
   double replan_min_interval_s_{1.5};
   double block_radius_m_{0.20};
+  double isam2_voxel_res_m_{0.08};
+  std::vector<Eigen::Vector3f> isam2_priors_map_;
+  std::vector<Eigen::Vector3f> isam2_new_obst_map_;
+  bool has_isam2_updates_{false};
+  bool has_odom_{false};
   std::vector<PlanGoal> goals_;
   std::shared_ptr<GroundTruthMap> gt_map_;
   std::unique_ptr<AStarPlanner> planner_;
@@ -183,6 +238,8 @@ class AStarPlannerNode : public rclcpp::Node {
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_map_cloud_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_odom_;
   rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr sub_replan_;
+  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_isam2_priors_;
+  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_isam2_new_obst_;
 };
 
 }  // namespace maze_planning

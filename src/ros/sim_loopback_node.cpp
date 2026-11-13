@@ -34,6 +34,8 @@ class SimLoopbackNode : public rclcpp::Node {
     map_frame_ = declare_parameter<std::string>("map_frame", "map_ned");
     odom_frame_ = declare_parameter<std::string>("odom_frame", "odom_ned");
     base_frame_ = declare_parameter<std::string>("base_frame", "base_link_frd");
+    const std::string odom_topic = declare_parameter<std::string>("odom_topic", "/odometry/local");
+    publish_map_odom_tf_ = declare_parameter<bool>("publish_map_odom_tf", true);
     const Eigen::Vector3d start(declare_parameter<double>("start_x", 0.9144),
                                 declare_parameter<double>("start_y", -2.5146),
                                 declare_parameter<double>("start_z", -0.78));
@@ -42,7 +44,7 @@ class SimLoopbackNode : public rclcpp::Node {
                             Eigen::Quaterniond(Eigen::AngleAxisd(start_yaw, Eigen::Vector3d::UnitZ())));
     cmd_timeout_s_ = declare_parameter<double>("cmd_timeout_s", 0.3);
 
-    pub_odom_ = create_publisher<nav_msgs::msg::Odometry>("/odometry/local", rclcpp::SensorDataQoS());
+    pub_odom_ = create_publisher<nav_msgs::msg::Odometry>(odom_topic, rclcpp::SensorDataQoS());
     pub_pose_ = create_publisher<geometry_msgs::msg::PoseStamped>("/viz/drone_pose", 10);
     sub_cmd_ = create_subscription<geometry_msgs::msg::TwistStamped>(
         "/control/cmd_vel", 10, [this](const geometry_msgs::msg::TwistStamped::SharedPtr m) {
@@ -90,11 +92,15 @@ class SimLoopbackNode : public rclcpp::Node {
     ps.pose = o.pose.pose;
     pub_pose_->publish(ps);
 
-    geometry_msgs::msg::TransformStamped map_odom;
-    map_odom.header.stamp = stamp;
-    map_odom.header.frame_id = map_frame_;
-    map_odom.child_frame_id = odom_frame_;
-    map_odom.transform.rotation.w = 1.0;
+    std::vector<geometry_msgs::msg::TransformStamped> tfs;
+    if (publish_map_odom_tf_ && map_frame_ != odom_frame_) {
+      geometry_msgs::msg::TransformStamped map_odom;
+      map_odom.header.stamp = stamp;
+      map_odom.header.frame_id = map_frame_;
+      map_odom.child_frame_id = odom_frame_;
+      map_odom.transform.rotation.w = 1.0;
+      tfs.push_back(map_odom);
+    }
     geometry_msgs::msg::TransformStamped odom_base;
     odom_base.header.stamp = stamp;
     odom_base.header.frame_id = odom_frame_;
@@ -103,11 +109,13 @@ class SimLoopbackNode : public rclcpp::Node {
     odom_base.transform.translation.y = pos.y();
     odom_base.transform.translation.z = pos.z();
     odom_base.transform.rotation = o.pose.pose.orientation;
-    tf_broadcaster_.sendTransform(std::vector<geometry_msgs::msg::TransformStamped>{map_odom, odom_base});
+    tfs.push_back(odom_base);
+    tf_broadcaster_.sendTransform(tfs);
   }
 
   tf2_ros::TransformBroadcaster tf_broadcaster_;
   std::string map_frame_, odom_frame_, base_frame_;
+  bool publish_map_odom_tf_{true};
   maze_planning::QuadPlant plant_;
   maze_planning::QuadState state_;
   double cmd_timeout_s_{0.3};
