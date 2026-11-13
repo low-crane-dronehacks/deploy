@@ -221,6 +221,76 @@ void testGraph(double yaw_drift = 0.02, double scale = 1.04) {
   CHECK(std::abs((est.predict(b).T_world_body.translation() - pr.T_world_body.translation()).norm() - 0.2) < 1e-9,
         "predict moves by the odometry delta");
 }
+
+void testPriorEsdfAdaptation() {
+  std::string err;
+  auto cad = CadPriorEsdf::load("config/cad_prior_esdf.bin", &err);
+  if (!cad) cad = CadPriorEsdf::load("../../config/cad_prior_esdf.bin", &err);
+  if (!cad) cad = CadPriorEsdf::load("/home/evan/dronehacks/deploy/config/cad_prior_esdf.bin", &err);
+  CHECK(cad != nullptr, "failed to load config/cad_prior_esdf.bin: %s", err.c_str());
+  if (!cad) return;
+
+  const PinholeCamera cam = camera();
+  const gtsam::Pose3 Tbc = bodyCam();
+  Isam2Params p;
+  DepthIsam2 est(p, cam, Tbc);
+  est.setCadPrior(cad);
+
+  // t = 0: priors seeded from Course v3 CAD ESDF; new obstacles & cleared space empty.
+  // Note ENU -> NED: A1 approach wall in ENU is x in [-1.03, -0.92], y in [-0.62, 0.41], z in [0, 1.73]
+  // -> in NED: x_ned in [-0.62, 0.41], y_ned in [-1.03, -0.92], z_ned in [-1.73, 0].
+  const auto p0 = est.priors();
+  CHECK(!p0.empty(), "t=0 CAD priors should not be empty");
+  CHECK(est.newUpdatedObstacles().empty(), "t=0 newUpdatedObstacles should be empty");
+  CHECK(est.clearedEmptySpace().empty(), "t=0 clearedEmptySpace should be empty");
+
+  const auto g0 = est.priorMap().buildDistanceGrid({0.0, -1.0, -0.8}, p.grid);
+  const float d0_stale = g0->distance({-0.10, -0.98, -0.80});
+  const float d0_shifted = g0->distance({-0.10, -0.42, -0.80});
+  CHECK(d0_stale < 0.09f, "t=0 CAD A1 wall should be occupied in prior ESDF (got %.3f m)", d0_stale);
+  CHECK(d0_shifted > 0.35f, "t=0 shifted target location should start in free space (got %.3f m)", d0_shifted);
+
+  // Feed 4 keyframes looking east (+y_ned, yaw = +90 deg) from y_ned = -1.85 m through stale A1 (y = -0.98 m)
+  // onto a real physical wall at y_ned = -0.42 m.
+  for (int k = 0; k < 4; ++k) {
+    const double t = 0.6 * k;
+    const gtsam::Pose3 X_true(gtsam::Rot3::Ypr(M_PI / 2.0, 0.0, 0.0),
+                              gtsam::Point3(-0.10 + 0.02 * k, -1.85, -0.80));
+    const gtsam::Pose3 T_wc = X_true * Tbc;
+    DepthFrame df;
+    df.stamp = t;
+    df.width = cam.width;
+    df.height = cam.height;
+    df.depth_m.assign(static_cast<size_t>(cam.width) * cam.height, 0.0f);
+    // Plane at y_ned = -0.42 m => in camera optical frame (z_opt = +y_ned): z = -0.42 - y_cam
+    const double z_wall = -0.42 - T_wc.translation().y();
+    std::fill(df.depth_m.begin(), df.depth_m.end(), static_cast<float>(z_wall));
+
+    OdomSample odom;
+    odom.stamp = t;
+    odom.T_world_body = X_true;
+    odom.v_world = Eigen::Vector3d::Zero();
+    est.addFrame(df, odom);
+  }
+
+  const auto p_after = est.priors();
+  const auto new_obs = est.newUpdatedObstacles();
+  const auto cleared = est.clearedEmptySpace();
+  const auto& g1 = *est.latest().distance;
+  const float d1_stale = g1.distance({-0.10, -0.98, -0.80});
+  const float d1_shifted = g1.distance({-0.10, -0.42, -0.80});
+
+  std::printf("prior adaptation: priors %zu -> %zu, cleared %zu, new_updated %zu | "
+              "stale A1 dist %.3f -> %.3f m, shifted wall dist %.3f -> %.3f m\n",
+              p0.size(), p_after.size(), cleared.size(), new_obs.size(),
+              d0_stale, d1_stale, d0_shifted, d1_shifted);
+
+  CHECK(p_after.size() < p0.size(), "stale CAD prior voxels should be carved away");
+  CHECK(!cleared.empty(), "clearedEmptySpace should record carved prior voxels");
+  CHECK(!new_obs.empty(), "newUpdatedObstacles should record newly observed wall voxels");
+  CHECK(d1_stale > 0.28f, "stale CAD wall should now be free space (got %.3f m)", d1_stale);
+  CHECK(d1_shifted < 0.09f, "shifted wall should now be occupied in ESDF (got %.3f m)", d1_shifted);
+}
 }  // namespace
 
 int main() {
@@ -228,6 +298,7 @@ int main() {
   testIcp();
   testGraph(0.0, 1.0);    // perfect odometry
   testGraph(0.02, 1.04);  // PX4 drifting 1.1 deg/s in yaw, 4% scale error
+  testPriorEsdfAdaptation();
   std::printf(failures ? "%d FAILURE(S)\n" : "all passed\n", failures);
   return failures ? EXIT_FAILURE : EXIT_SUCCESS;
 }

@@ -27,6 +27,7 @@
 #include "isam2_depth/depth_icp.hpp"
 #include "isam2_depth/distance_grid.hpp"
 #include "isam2_depth/mppi_interface.hpp"
+#include "isam2_depth/prior_esdf_map.hpp"
 #include "isam2_depth/types.hpp"
 
 namespace isam2_depth {
@@ -70,6 +71,9 @@ struct Isam2Params {
   double map_voxel = 0.05;               // m, per-keyframe cloud downsampling
   double map_radius = 8.0;               // m, keyframes farther than this from the vehicle are left out
   GridParams grid;
+  PriorEsdfParams prior_map;
+  double reintegrate_trans_m = 0.04;     // m, replay keyframe raycasts when graph smoothing shifts a past pose by > this
+  double reintegrate_rot_deg = 2.0;
 };
 
 // Benchmark baseline: VIO + sequential standard point-to-plane ICP without factor-graph smoothing,
@@ -98,7 +102,13 @@ class DepthIsam2 {
  public:
   DepthIsam2(const Isam2Params& p, const PinholeCamera& cam, const gtsam::Pose3& T_body_cam);
 
-  void setCadPrior(std::shared_ptr<const CadPriorEsdf> prior) { cad_prior_ = std::move(prior); }
+  void setCadPrior(std::shared_ptr<const CadPriorEsdf> prior);
+
+  // Prior-seeded log-odds 3D map queries (world NED voxel centres):
+  std::vector<Eigen::Vector3f> priors() const { return prior_map_.priors(); }
+  std::vector<Eigen::Vector3f> newUpdatedObstacles() const { return prior_map_.newUpdatedObstacles(); }
+  std::vector<Eigen::Vector3f> clearedEmptySpace() const { return prior_map_.clearedEmptySpace(); }
+  const PriorEsdfMap& priorMap() const { return prior_map_; }
 
   // One depth frame with PX4's estimate at the frame's stamp. Returns true if it became a keyframe (the graph
   // was updated and latest() changed). Landmark observations force a keyframe.
@@ -162,8 +172,10 @@ class DepthIsam2 {
     double stamp;
     OdomSample odom;
     gtsam::Pose3 initial_pose;                // X_init when first inserted into iSAM2
+    std::optional<gtsam::Pose3> raycast_pose; // pose at which `rays` were last integrated into prior_map_
     std::optional<OrganisedCloud> cloud;      // dropped after keep_dense newer keyframes
     std::vector<Eigen::Vector3f> map_points;  // body FRD, voxel-downsampled
+    std::vector<PriorEsdfMap::RaySample> rays;
   };
 
   // ICP between keyframe clouds as a body-frame BetweenFactor X(j)->X(k); false if rejected.
@@ -177,6 +189,7 @@ class DepthIsam2 {
   PinholeCamera cam_;
   gtsam::Pose3 T_bc_, T_cb_;
   std::shared_ptr<const CadPriorEsdf> cad_prior_;
+  PriorEsdfMap prior_map_;
   gtsam::ISAM2 isam_;
   gtsam::Values estimate_;
   std::vector<Keyframe> kfs_;

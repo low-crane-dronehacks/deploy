@@ -214,28 +214,33 @@ def astar3d(clr: np.ndarray, ax_z: np.ndarray, start: tuple[int, int, int], goal
 
 
 def plan_route(pts, prior, args):
-    """3D A* over the joint clearance field `min(d_scan_3d, d_cad_esdf_3d)` so the trajectory is guaranteed
-    collision-free in BOTH the physical .ply point cloud AND the prebaked Course v3 CAD ESDF."""
+    """3D A* route planning.
+    --route_mode 'scan' (default): plans through the physical scan's free space (d_scan_3d).
+    --route_mode 'cad_prior': plans using the CAD prior ESDF (d_cad_3d)."""
     res, half = 0.05, float(prior.meta['arena']['arena_half_m'])
     drone_r = float(prior.meta['arena']['collision_radius_m'])
     z_nom = -float(args.alt)
 
-    # Build 3D KD-tree on above-floor physical scan obstacles + exact CAD obstacle ESDF query
+    # Build 3D KD-tree on above-floor physical scan obstacles
     obs_scan = pts[-pts[:, 2] >= 0.15]
     obs_tree = cKDTree(obs_scan)
-    cad_query = load_cad_obstacle_esdf(args.prior)
 
     ax_xy = np.round(np.arange(-half, half + 1e-6, res), 4)
     ax_z = np.round(np.arange(-1.25, -0.45 + 1e-6, res), 4)
     gn, ge, gz = np.meshgrid(ax_xy, ax_xy, ax_z, indexing='ij')
     gp = np.column_stack([gn.ravel(), ge.ravel(), gz.ravel()])
 
-    d_scan_3d = obs_tree.query(gp)[0].reshape(gn.shape)
-    d_net_3d = (half - 0.12) - np.maximum(np.abs(gn), np.abs(ge))
-    d_flr_3d = np.maximum(0.0, -gz)
-    d_scan_3d = np.minimum(np.minimum(d_scan_3d, d_net_3d), d_flr_3d)
-    d_cad_3d = cad_query(gp, half=half, net_margin=0.12).reshape(gn.shape)
-    clr3d = np.minimum(d_scan_3d, d_cad_3d)
+    if args.route_mode == 'scan':
+        d_scan_3d = obs_tree.query(gp)[0].reshape(gn.shape)
+        d_net_3d = (half - 0.12) - np.maximum(np.abs(gn), np.abs(ge))
+        d_flr_3d = np.maximum(0.0, -gz)
+        clr3d = np.minimum(np.minimum(d_scan_3d, d_net_3d), d_flr_3d)
+        cad_query = None
+    elif args.route_mode == 'cad_prior':
+        cad_query = load_cad_obstacle_esdf(args.prior)
+        clr3d = cad_query(gp, half=half, net_margin=0.12).reshape(gn.shape)
+    else:
+        raise ValueError(f'Unknown route_mode: {args.route_mode}')
 
     def idx_of(p_ned):
         return (
@@ -287,8 +292,7 @@ def plan_route(pts, prior, args):
     for name, p_nom, c in raw_goals:
         pw = pos_of(c)
         print(f'  goal {name:13s} ({p_nom[0]:+.2f}, {p_nom[1]:+.2f}, {p_nom[2]:+.2f}) -> '
-              f'({pw[0]:+.2f}, {pw[1]:+.2f}, {pw[2]:+.2f}), joint clr {clr3d[c]:.2f} m '
-              f'(cad {d_cad_3d[c]:.2f}, scan {d_scan_3d[c]:.2f})')
+              f'({pw[0]:+.2f}, {pw[1]:+.2f}, {pw[2]:+.2f}), {args.route_mode} clr {clr3d[c]:.2f} m')
         cells.append((name, c))
 
     path, cur = [cells[0][1]], cells[0][1]
@@ -299,26 +303,30 @@ def plan_route(pts, prior, args):
             if seg:
                 break
         if not seg:
-            print(f'  WARNING: no joint CAD+scan path to {name} with >= {max(0.22, drone_r + 0.02):.2f} m clearance; skipped')
+            print(f'  WARNING: no {args.route_mode} path to {name} with >= {max(0.22, drone_r + 0.02):.2f} m clearance; skipped')
             continue
         path += seg[1:]
         cur = c
     xyz = np.array([pos_of(c) for c in path])
 
-    def joint_min_line(a, b):
+    def min_line(a, b):
         n = max(2, int(np.linalg.norm(b - a) / 0.02))
         s_l = np.linspace(0.0, 1.0, n)[:, None]
         pts_l = a + s_l * (b - a)
-        dc = cad_query(pts_l, half=half, net_margin=0.12)
-        ds = np.minimum(obs_tree.query(pts_l)[0], (half - 0.12) - np.maximum(np.abs(pts_l[:, 0]), np.abs(pts_l[:, 1])))
-        return float(min(dc.min(), ds.min()))
+        if args.route_mode == 'cad_prior':
+            dc = cad_query(pts_l, half=half, net_margin=0.12)
+            return float(dc.min())
+        else:
+            ds = np.minimum(obs_tree.query(pts_l)[0], (half - 0.12) - np.maximum(np.abs(pts_l[:, 0]), np.abs(pts_l[:, 1])))
+            ds = np.minimum(ds, np.maximum(0.0, -pts_l[:, 2]))
+            return float(ds.min())
 
     r_shortcut = max(args.clearance * 0.90, drone_r + 0.05)
     r_smooth = max(drone_r + 0.03, 0.23)
     short, i = [xyz[0]], 0
     while i < len(xyz) - 1:
         j = len(xyz) - 1
-        while j > i + 1 and joint_min_line(xyz[i], xyz[j]) < r_shortcut:
+        while j > i + 1 and min_line(xyz[i], xyz[j]) < r_shortcut:
             j -= 1
         short.append(xyz[j])
         i = j
@@ -327,10 +335,10 @@ def plan_route(pts, prior, args):
         q = [poly[0]]
         for a, b in zip(poly[:-1], poly[1:]):
             p1, p2 = 0.75 * a + 0.25 * b, 0.25 * a + 0.75 * b
-            if joint_min_line(q[-1], p1) >= r_smooth and joint_min_line(p1, p2) >= r_smooth:
+            if min_line(q[-1], p1) >= r_smooth and min_line(p1, p2) >= r_smooth:
                 q += [p1, p2]
             else:
-                if joint_min_line(q[-1], a) >= r_smooth:
+                if min_line(q[-1], a) >= r_smooth:
                     q.append(a)
                 q.append(b)
         if np.linalg.norm(q[-1] - poly[-1]) > 1e-5:
@@ -344,12 +352,16 @@ def plan_route(pts, prior, args):
     ss = np.arange(0.0, s[-1], 0.02)
     route = np.column_stack([np.interp(ss, s, poly[:, k]) for k in range(3)])
 
-    dc_r = cad_query(route, half=half, net_margin=0.12)
     ds_r = np.minimum(obs_tree.query(route)[0], (half - 0.12) - np.maximum(np.abs(route[:, 0]), np.abs(route[:, 1])))
+    ds_r = np.minimum(ds_r, np.maximum(0.0, -route[:, 2]))
     k_nom = int(np.argmin(np.abs(ax_z - z_nom)))
     clr2d = clr3d[:, :, k_nom]
-    print(f'route: {s[-1]:.1f} m, min clearance CAD {dc_r.min():.2f} m / scan {ds_r.min():.2f} m '
-          f'(drone radius {drone_r} m)')
+    if args.route_mode == 'cad_prior':
+        dc_r = cad_query(route, half=half, net_margin=0.12)
+        print(f'route: {s[-1]:.1f} m, min clearance CAD {dc_r.min():.2f} m / scan {ds_r.min():.2f} m '
+              f'(drone radius {drone_r} m)')
+    else:
+        print(f'route: {s[-1]:.1f} m, min clearance scan {ds_r.min():.2f} m (drone radius {drone_r} m)')
     return route, clr2d, ax_xy
 
 
@@ -613,7 +625,7 @@ def run_ros(args, pts, rgb, tree, traj, est, renderer, stereo=None):
     dt = t_arr[1] - t_arr[0]
     world = 'isam2_world_ned'
 
-    rclpy.init()
+    rclpy.init(signal_handler_options=rclpy.SignalHandlerOptions.NO)
     node = Node('spoof_px4_depth')
     px4_qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, durability=DurabilityPolicy.TRANSIENT_LOCAL,
                          history=HistoryPolicy.KEEP_LAST, depth=1)
@@ -801,13 +813,24 @@ def run_ros(args, pts, rgb, tree, traj, est, renderer, stereo=None):
     node.create_subscription(PathMsg, '/isam2_depth/keyframes', lambda m: kf_path.__setitem__(0, m), latched)
     exe = SingleThreadedExecutor()
     exe.add_node(node)
-    spin = threading.Thread(target=exe.spin, daemon=True)
+    def _spin():
+        try:
+            exe.spin()
+        except Exception:
+            pass
+
+    spin = threading.Thread(target=_spin, daemon=True)
     spin.start()
 
     def report(final=False):
         with lock:
             a = np.array(rows) if rows else None
-        n_pub = node.count_publishers('/isam2_depth/odometry')
+        n_pub = 0
+        if rclpy.ok():
+            try:
+                n_pub = node.count_publishers('/isam2_depth/odometry')
+            except Exception:
+                n_pub = 0
         if n_pub > 1:
             print(f'  WARNING: {n_pub} nodes publish /isam2_depth/odometry (a leftover isam2_depth_node?); '
                   'the scores mix their outputs')
@@ -969,6 +992,9 @@ def main(argv=None):
     ap.add_argument('--ty', type=float, default=-0.94)
     ap.add_argument('--auto_align', action='store_true', help='recompute the alignment instead (~10 s)')
     g = ap.add_argument_group('route')
+    g.add_argument('--route_mode', choices=('scan', 'cad_prior'), default='scan',
+                   help="planning obstacle field: 'scan' = physical .ply scan free space (default), "
+                        "'cad_prior' = CAD prior ESDF")
     g.add_argument('--alt', type=float, default=0.8, help='flight height [m]')
     g.add_argument('--alt_wiggle', type=float, default=0.1, help='height oscillation amplitude [m]')
     g.add_argument('--speed', type=float, default=0.5)

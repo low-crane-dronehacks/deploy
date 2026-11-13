@@ -48,12 +48,21 @@ out.
 ## Code
 
 ```
-src/include/isam2_depth/   types, depth_icp (cloud + ICP), cad_prior (CADP v1 ESDF), factors, distance_grid, depth_isam2, mppi_interface
+src/include/isam2_depth/   types, depth_icp (cloud + ICP), cad_prior (CADP v1 ESDF), prior_esdf_map (PriorEsdfMap 3D log-odds grid), factors, distance_grid, depth_isam2, mppi_interface
 src/*.cpp                  core library: Eigen + GTSAM only, no ROS (includes VioIcpTracker baseline)
 src/ros/isam2_depth_node.cpp   ROS 2 node (built only when px4_msgs is found)
 src/test/                  synthetic test + scan-depth spoof benchmark (spoof_px4_depth.py, spoof_isam2.launch.py)
 scripts/build_cad_prior.py builds config/cad_prior_esdf.bin (CADP v1) + config/arena_prior.bin from dronehacks-course-v3.obj
 ```
+
+**`PriorEsdfMap` (`src/include/isam2_depth/prior_esdf_map.hpp`, `src/prior_esdf_map.cpp`):**
+When `cad_prior_path` (`config/cad_prior_esdf.bin`) is provided, `DepthIsam2` seeds a 3D log-odds occupancy grid (`0.08 m` voxels, floor `-z < 0.16 m` cropped) from the Course v3 CAD ESDF at `t = 0`. As smoothed keyframes arrive (replaying from prior if loop-closure smoothing shifts an older pose `> 4 cm` / `> 2 deg`), 3D Amanatides-Woo DDA raycasting carves free space (`-l_free`) where CAD obstacles moved or are absent in the real world, and fuses occupied hits (`+l_occ`) on real surfaces, feeding the exact 3D EDT (`DistanceGrid`) for MPPI/planners.
+
+**Latched `PointCloud2` topics on `isam2_depth_node`:**
+- `~/priors`: active CAD prior obstacle voxel centres (`prior_occ && log_odds > 0`), published immediately at startup (`t = 0`) and shrinking where depth rays clear empty space.
+- `~/new_updated_obstacles`: newly discovered / shifted obstacle voxel centres (`!prior_occ && log_odds > 0.2`).
+- `~/cleared_empty_space`: prebaked CAD prior voxels cleared by pass-through depth rays (`prior_occ && log_odds < -0.2`).
+- `~/vio_icp_odometry`: benchmark VIO + sequential point-to-plane ICP baseline without factor-graph smoothing.
 
 **MPPI hook, across processes (what `launch/maze_autonomy.launch.py isam2:=true` does):** `mppi_controller_node`
 subscribes to `~/obstacles` (occupied voxel centres, frame `isam2_world_ned`), rebuilds the same `DistanceGrid`
@@ -91,6 +100,9 @@ cmake -S src -B build && cmake --build build && ./build/test_depth_isam2
 - `~/odometry` (nav_msgs/Odometry at the PX4 rate; covariance reordered to ROS's [trans, rot])
 - `~/vio_icp_odometry` (nav_msgs/Odometry at the PX4 rate): benchmark-only VIO + standard frame-to-frame point-to-point ICP (`VioIcpTracker`) without factor graph optimization, revisit loop closures, kinematic/attitude/body-velocity factors, or CAD prior
 - `~/obstacles` (PointCloud2 of occupied voxels, per keyframe): the local window the MPPI sees
+- `~/priors` (PointCloud2, latched): active CAD prior obstacle voxel centres (`prior_occ && log_odds > 0`), published immediately at startup (`t = 0`) and shrinking where depth rays clear empty space
+- `~/new_updated_obstacles` (PointCloud2, latched): newly discovered / shifted obstacle voxel centres (`!prior_occ && log_odds > 0.2`)
+- `~/cleared_empty_space` (PointCloud2, latched): prebaked CAD prior voxels cleared by pass-through depth rays (`prior_occ && log_odds < -0.2`)
 - `~/keyframes` (nav_msgs/Path, latched): every keyframe pose at its current smoothed value, per keyframe. This is
   the paper's output, the whole trajectory re-estimated; past poses move when ICP or revisit links correct them.
 - `~/map` (PointCloud2, latched): the whole corrected map. Every keyframe's 5 cm cloud is placed at its smoothed
@@ -122,7 +134,7 @@ and interpolates them to the depth header stamp.
 ## Spoof test: fake PX4 + depth rendered from a course scan
 
 No PX4, Gazebo or vehicle. `src/test/spoof_px4_depth.py` takes a scan of the course (.ply, aligned with
-`ego_planner/scripts/view_course_scan.py`), plans a 3D A* route through the **joint** free space `min(d_scan_3d, d_cad_esdf_3d)` (guaranteed collision-free in both the physical `.ply` scan and the prebaked Course v3 CAD ESDF `config/arena_prior.bin`), renders
+`ego_planner/scripts/view_course_scan.py`), plans a 3D A* route through the physical scan's free space (`--route_mode scan`, zero CAD ESDF input used by the spoofer; `--route_mode cad_prior` also available for benchmarking), renders
 OAK-like 16UC1 depth from it (z-buffered splats, noise 0.003 z^2, invalid edges, dropouts) and publishes a drifting
 fake PX4 estimate on `/fmu/out/vehicle_local_position_v1` + `vehicle_attitude`, with `/clock`. It scores the node's
 `~/odometry` against the truth and its `~/obstacles` against the scan. It publishes telemetry only, never a command.
@@ -165,6 +177,5 @@ Worst keyframe update: about 31 ms, of which ICP is about 18 ms, iSAM2 about 1.4
 **Not done yet:**
 - Not run on SITL, FlyX or the Jetson (only the spoof test above, on x86). Expect several times slower on the Orin Nano; `cloud_stride`,
   `extra_links` and `IcpParams::point_step` are the knobs.
-- No free-space carving: a voxel stays occupied once it has `grid_min_hits` points. Stereo speckle that repeats
-  across keyframes, and anything that moves, persist.
+- When `cad_prior_path` is unset (`""`), `DistanceGrid` falls back to raw local-window hit counting (`grid_min_hits`, without log-odds raycast carving). When `cad_prior_path` is set, `PriorEsdfMap` performs full 3D Amanatides-Woo DDA free-space carving (`-l_free`) and hit fusion (`+l_occ`).
 - Not in `launch/policynav.launch.py`; `launch/maze_autonomy.launch.py isam2:=true` runs it with the MPPI.

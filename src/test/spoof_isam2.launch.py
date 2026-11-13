@@ -45,7 +45,10 @@ def setup(context):
                           'map_save_path': LaunchConfiguration('map_save').perform(context)}]),
     ]
     # start_delay_s: the spoofed flight (fake PX4 + depth) starts this long after iSAM2 and RViz, so RViz is up first
-    spoof = ExecuteProcess(cmd=['/usr/bin/python3', str(HERE / 'spoof_px4_depth.py'), ply, *extra], output='screen')
+    spoof = ExecuteProcess(
+        cmd=['/usr/bin/python3', str(HERE / 'spoof_px4_depth.py'), ply, *extra],
+        output='screen',
+        additional_env={'PYTHONNOUSERSITE': '1'})
     delay = float(LaunchConfiguration('start_delay_s').perform(context))
     actions.append(TimerAction(period=delay, actions=[spoof]) if delay > 0 else spoof)
     if stereo:

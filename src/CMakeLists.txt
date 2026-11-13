@@ -39,7 +39,7 @@ endif()
 
 # 2. Core iSAM2 Depth Factor Graph Library (when GTSAM 4.2 is installed)
 if(GTSAM_FOUND)
-  add_library(isam2_depth_core STATIC depth_icp.cpp cad_prior.cpp distance_grid.cpp depth_isam2.cpp)
+  add_library(isam2_depth_core STATIC depth_icp.cpp cad_prior.cpp distance_grid.cpp prior_esdf_map.cpp depth_isam2.cpp)
   target_include_directories(isam2_depth_core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include> $<INSTALL_INTERFACE:include>)
   target_link_libraries(isam2_depth_core PUBLIC gtsam Eigen3::Eigen)

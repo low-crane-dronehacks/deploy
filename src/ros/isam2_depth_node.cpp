@@ -93,8 +93,18 @@ class Isam2DepthNode : public rclcpp::Node {
     pub_kf_ = create_publisher<nav_msgs::msg::Path>("~/keyframes", latched);
     pub_map_ = create_publisher<sensor_msgs::msg::PointCloud2>("~/map", latched);
     pub_adapted_ = create_publisher<sensor_msgs::msg::PointCloud2>("~/adapted_map", latched);
+    pub_priors_ = create_publisher<sensor_msgs::msg::PointCloud2>("~/priors", latched);
+    pub_new_obst_ = create_publisher<sensor_msgs::msg::PointCloud2>("~/new_updated_obstacles", latched);
+    pub_cleared_ = create_publisher<sensor_msgs::msg::PointCloud2>("~/cleared_empty_space", latched);
     pub_lm_ = create_publisher<visualization_msgs::msg::MarkerArray>("~/landmarks", latched);
     pub_prior_updates_ = create_publisher<visualization_msgs::msg::MarkerArray>("~/prior_updates", latched);
+    if (cad_prior_) {
+      const PriorEsdfMap seed_map(p_.prior_map, cad_prior_.get());
+      const builtin_interfaces::msg::Time t0_stamp{};
+      publishCloud(*pub_priors_, seed_map.priors(), t0_stamp);
+      publishCloud(*pub_new_obst_, {}, t0_stamp);
+      publishCloud(*pub_cleared_, {}, t0_stamp);
+    }
     srv_save_ = create_service<std_srvs::srv::Trigger>(
         "~/save_map", [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
                              std::shared_ptr<std_srvs::srv::Trigger::Response> res) {
@@ -250,6 +260,9 @@ class Isam2DepthNode : public rclcpp::Node {
     if (vio_icp_) vio_icp_->addFrame(*frame, *odom);
     if (!est_->addFrame(*frame, *odom)) return;
     if (publish_obstacles_ && pub_obst_->get_subscription_count() > 0) publishObstacles(m.header.stamp);
+    publishCloud(*pub_priors_, est_->priors(), m.header.stamp);
+    publishCloud(*pub_new_obst_, est_->newUpdatedObstacles(), m.header.stamp);
+    publishCloud(*pub_cleared_, est_->clearedEmptySpace(), m.header.stamp);
     if (pub_kf_->get_subscription_count() > 0) publishKeyframes(m.header.stamp);
     if (pub_lm_->get_subscription_count() > 0) publishLandmarks(m.header.stamp);
     if (pub_prior_updates_->get_subscription_count() > 0) publishPriorUpdates(m.header.stamp);
@@ -551,6 +564,7 @@ class Isam2DepthNode : public rclcpp::Node {
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr sub_depth_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom_, pub_vio_icp_odom_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_obst_, pub_map_, pub_adapted_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_priors_, pub_new_obst_, pub_cleared_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_kf_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_lm_, pub_prior_updates_;
   rclcpp::TimerBase::SharedPtr timer_;

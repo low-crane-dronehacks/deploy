@@ -159,7 +159,12 @@ MppiInput VioIcpTracker::predict(const OdomSample& now) const {
 }
 
 DepthIsam2::DepthIsam2(const Isam2Params& p, const PinholeCamera& cam, const gtsam::Pose3& T_body_cam)
-    : p_(p), cam_(cam), T_bc_(T_body_cam), T_cb_(T_body_cam.inverse()), isam_(isamParams(p)) {}
+    : p_(p), cam_(cam), T_bc_(T_body_cam), T_cb_(T_body_cam.inverse()), prior_map_(p.prior_map), isam_(isamParams(p)) {}
+
+void DepthIsam2::setCadPrior(std::shared_ptr<const CadPriorEsdf> prior) {
+  cad_prior_ = std::move(prior);
+  prior_map_.setCadPrior(cad_prior_.get());
+}
 
 bool DepthIsam2::addFrame(const DepthFrame& depth, const OdomSample& odom, const std::vector<LandmarkObs>& obs) {
   // ── keyframe? ──
@@ -182,6 +187,7 @@ bool DepthIsam2::addFrame(const DepthFrame& depth, const OdomSample& odom, const
   Keyframe kf;
   kf.stamp = odom.stamp;
   kf.odom = odom;
+  kf.rays = prior_map_.extractRays(depth, cam_);
   OrganisedCloud cloud = makeCloud(depth, cam_, p_.cloud);
   {
     std::vector<Eigen::Vector3f> body;
@@ -342,15 +348,47 @@ void DepthIsam2::rebuildOutput(size_t k) {
   } catch (const std::exception&) {   // keep identity: "unknown"
   }
   const Eigen::Vector3d c = out.T_world_body.translation();
-  std::vector<Eigen::Vector3f> world;
-  for (size_t j = 0; j <= k; ++j) {
+  // Update prior-seeded log-odds 3D ESDF from smoothed keyframe rays (retroactively replaying if graph smoothing
+  // shifted any previously integrated keyframe pose beyond threshold).
+  bool need_replay = false;
+  for (size_t j = 0; j < k; ++j) {
+    if (!kfs_[j].raycast_pose) {
+      need_replay = true;
+      break;
+    }
     const gtsam::Pose3 Xj = estimate_.at<gtsam::Pose3>(X(j));
-    if ((Xj.translation() - c).norm() > p_.map_radius) continue;
-    const Eigen::Matrix3f R = Xj.rotation().matrix().cast<float>();
-    const Eigen::Vector3f t = Xj.translation().cast<float>();
-    for (const auto& q : kfs_[j].map_points) world.push_back(R * q + t);
+    const gtsam::Pose3 delta = kfs_[j].raycast_pose->between(Xj);
+    if (delta.translation().norm() > p_.reintegrate_trans_m ||
+        angle(delta.rotation()) > p_.reintegrate_rot_deg * kDeg) {
+      need_replay = true;
+      break;
+    }
   }
-  out.distance = std::make_shared<const DistanceGrid>(world, c, p_.grid);
+  if (need_replay) {
+    prior_map_.resetToPrior();
+    for (size_t j = 0; j <= k; ++j) {
+      const gtsam::Pose3 Xj = estimate_.at<gtsam::Pose3>(X(j));
+      prior_map_.integrateRays(kfs_[j].rays, Xj * T_bc_);
+      kfs_[j].raycast_pose = Xj;
+    }
+  } else {
+    prior_map_.integrateRays(kfs_[k].rays, out.T_world_body * T_bc_);
+    kfs_[k].raycast_pose = out.T_world_body;
+  }
+
+  if (cad_prior_) {
+    out.distance = prior_map_.buildDistanceGrid(c, p_.grid);
+  } else {
+    std::vector<Eigen::Vector3f> world;
+    for (size_t j = 0; j <= k; ++j) {
+      const gtsam::Pose3 Xj = estimate_.at<gtsam::Pose3>(X(j));
+      if ((Xj.translation() - c).norm() > p_.map_radius) continue;
+      const Eigen::Matrix3f R = Xj.rotation().matrix().cast<float>();
+      const Eigen::Vector3f t = Xj.translation().cast<float>();
+      for (const auto& q : kfs_[j].map_points) world.push_back(R * q + t);
+    }
+    out.distance = std::make_shared<const DistanceGrid>(world, c, p_.grid);
+  }
   // Point3 and Vector3 are the same type: select landmarks by symbol, not by type
   for (const auto& kv : estimate_.extract<gtsam::Point3>(gtsam::Symbol::ChrTest('l')))
     out.landmarks[static_cast<int>(gtsam::Symbol(kv.first).index())] = kv.second;
