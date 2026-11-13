@@ -563,7 +563,7 @@ double GroundTruthMap::queryAnalytical(const Eigen::Vector3d& p_ned,
     }
   }
 
-  // 4. Analytical tunnel arch roof & side walls
+  // 4. Analytical tunnel culvert shell (elliptical cross-section centered at alt = 0.5 * arch_top_m)
   {
     const double dx = p_ned.x() - tunnel_.entry_xy.x();
     const double dy = p_ned.y() - tunnel_.entry_xy.y();
@@ -571,35 +571,34 @@ double GroundTruthMap::queryAnalytical(const Eigen::Vector3d& p_ned,
     const double v_lat = dx * tunnel_.axis_v_xy.x() + dy * tunnel_.axis_v_xy.y();
     const double alt = -p_ned.z();
     if (s_along >= -0.35 && s_along <= tunnel_.length_m + 0.35 &&
-        std::abs(v_lat) <= tunnel_.half_width_m + 0.45 && alt <= tunnel_.arch_top_m + 0.45) {
+        std::abs(v_lat) <= tunnel_.half_width_m + 0.45 && alt >= -0.25 && alt <= tunnel_.arch_top_m + 0.45) {
       const double s_clamped = std::clamp(s_along, 0.0, tunnel_.length_m);
       const double ds = std::max({0.0, -s_along, s_along - tunnel_.length_m});
-      if (alt <= 0.45) {
-        const double d_side = std::abs( std::abs(v_lat) - tunnel_.half_width_m ) - 0.5 * tunnel_.shell_thick_m;
-        const double d3 = std::hypot(std::max(0.0, d_side), ds);
-        if (d3 < best_d) {
-          best_d = d3;
-          const double sign_v = (v_lat >= 0.0) ? 1.0 : -1.0;
-          const double wy = tunnel_.entry_xy.y() + s_clamped * tunnel_.axis_u_xy.y() +
-                            sign_v * tunnel_.half_width_m * tunnel_.axis_v_xy.y();
-          const double wx = tunnel_.entry_xy.x() + s_clamped * tunnel_.axis_u_xy.x() +
-                            sign_v * tunnel_.half_width_m * tunnel_.axis_v_xy.x();
-          closest_pt_out = Eigen::Vector3d(wx, wy, p_ned.z());
-        }
-      } else {
-        const double dz_arch = alt - 0.3810;
-        const double r_arch = std::hypot(v_lat, dz_arch);
-        const double d_arch = std::abs(r_arch - tunnel_.half_width_m) - 0.5 * tunnel_.shell_thick_m;
-        const double d3 = std::hypot(std::max(0.0, d_arch), ds);
-        if (d3 < best_d) {
-          best_d = d3;
-          const double scale = (r_arch > 1e-6) ? (tunnel_.half_width_m / r_arch) : 1.0;
-          const double cv = v_lat * scale;
-          const double calt = 0.3810 + dz_arch * scale;
-          const double wx = tunnel_.entry_xy.x() + s_clamped * tunnel_.axis_u_xy.x() + cv * tunnel_.axis_v_xy.x();
-          const double wy = tunnel_.entry_xy.y() + s_clamped * tunnel_.axis_u_xy.y() + cv * tunnel_.axis_v_xy.y();
-          closest_pt_out = Eigen::Vector3d(wx, wy, -calt);
-        }
+      const double a = tunnel_.half_width_m;
+      const double z_c = 0.5 * tunnel_.arch_top_m;
+      const double b = z_c;
+      const double px = std::abs(v_lat);
+      const double dz = alt - z_c;
+      const double py = std::abs(dz);
+      constexpr double kHalfPi = 1.5707963267948966;
+      double theta = (px + py > 1e-9) ? std::atan2(a * py, b * px) : 0.0;
+      for (int it = 0; it < 5; ++it) {
+        const double ct = std::cos(theta);
+        const double st = std::sin(theta);
+        const double f = (a * a - b * b) * ct * st - px * a * st + py * b * ct;
+        const double df = (a * a - b * b) * (ct * ct - st * st) - px * a * ct - py * b * st;
+        if (std::abs(df) <= 1e-12) break;
+        theta = std::clamp(theta - f / df, 0.0, kHalfPi);
+      }
+      const double ex = (v_lat >= 0.0 ? 1.0 : -1.0) * a * std::cos(theta);
+      const double calt = z_c + (dz >= 0.0 ? 1.0 : -1.0) * b * std::sin(theta);
+      const double d_shell = std::hypot(v_lat - ex, alt - calt) - 0.5 * tunnel_.shell_thick_m;
+      const double d3 = (ds == 0.0 && d_shell < 0.0) ? d_shell : std::hypot(std::max(0.0, d_shell), ds);
+      if (d3 < best_d) {
+        best_d = d3;
+        const double wx = tunnel_.entry_xy.x() + s_clamped * tunnel_.axis_u_xy.x() + ex * tunnel_.axis_v_xy.x();
+        const double wy = tunnel_.entry_xy.y() + s_clamped * tunnel_.axis_u_xy.y() + ex * tunnel_.axis_v_xy.y();
+        closest_pt_out = Eigen::Vector3d(wx, wy, -calt);
       }
     }
   }

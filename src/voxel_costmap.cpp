@@ -150,8 +150,8 @@ void VoxelCostmap::rebuildDynamicDistanceGrid(const Eigen::Vector3d& center_map)
   dynamic_edt_ = std::make_shared<const isam2_depth::DistanceGrid>(pts, center_map, gp);
 }
 
-double VoxelCostmap::clearance(const Eigen::Vector3d& p_map) const {
-  double d = gt_map_ ? gt_map_->clearance(p_map) : 2.5;
+double VoxelCostmap::dynamicClearance(const Eigen::Vector3d& p_map) const {
+  double d = cfg_.max_distance_m;
   if (dynamic_edt_ && dynamic_edt_->inside(p_map)) {
     d = std::min(d, static_cast<double>(dynamic_edt_->distance(p_map)));
   }
@@ -161,17 +161,16 @@ double VoxelCostmap::clearance(const Eigen::Vector3d& p_map) const {
   return d;
 }
 
+double VoxelCostmap::clearance(const Eigen::Vector3d& p_map) const {
+  const double d_gt = gt_map_ ? gt_map_->clearance(p_map) : 2.5;
+  return std::min(d_gt, dynamicClearance(p_map));
+}
+
 double VoxelCostmap::clearanceAndGradient(const Eigen::Vector3d& p_map,
                                           Eigen::Vector3d& grad_out) const {
   Eigen::Vector3d g_gt(1.0, 0.0, 0.0);
   const double d_gt = gt_map_ ? gt_map_->clearanceAndGradient(p_map, g_gt) : 2.5;
-  double d_dyn = 1e9;
-  if (dynamic_edt_ && dynamic_edt_->inside(p_map)) {
-    d_dyn = std::min(d_dyn, static_cast<double>(dynamic_edt_->distance(p_map)));
-  }
-  if (isam2_grid_ && isam2_grid_->inside(p_map)) {
-    d_dyn = std::min(d_dyn, static_cast<double>(isam2_grid_->distance(p_map)));
-  }
+  const double d_dyn = dynamicClearance(p_map);
 
   if (d_gt <= d_dyn) {
     grad_out = g_gt;

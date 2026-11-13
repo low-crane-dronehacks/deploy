@@ -77,6 +77,20 @@ double MPPIController::queryClearanceOdom(const Eigen::Vector3d& p_odom) const {
   return d;
 }
 
+double MPPIController::queryStaticClearanceOdom(const Eigen::Vector3d& p_odom) const {
+  const Eigen::Vector3d p_map = T_map_odom_.apply(p_odom);
+  return costmap_ ? costmap_->groundTruthMap().clearance(p_map) : 2.5;
+}
+
+double MPPIController::queryDynamicClearanceOdom(const Eigen::Vector3d& p_odom) const {
+  const Eigen::Vector3d p_map = T_map_odom_.apply(p_odom);
+  double d = costmap_ ? costmap_->dynamicClearance(p_map) : 2.5;
+  if (active_grid_ && active_grid_->inside(p_odom)) {
+    d = std::min(d, static_cast<double>(active_grid_->distance(p_odom)));
+  }
+  return d;
+}
+
 void MPPIController::smoothControlSequence() {
   const int T = static_cast<int>(u_mean_.size());
   if (T < 3) return;
@@ -168,7 +182,9 @@ TrajectorySetpointCmd MPPIController::computeCommand(
   if (cfg_.adaptive_safe_distance) {
     const double floor_safe = cfg_.lethal_distance_m + cfg_.adaptive_safe_margin_m;
     for (int t = 0; t < T; ++t) {
-      const double c_ref = queryClearanceOdom(horizon_refs_[t].pos);
+      // Measure reference clearance against static walls only so an unmodelled obstacle sitting
+      // dead on the global path cannot collapse MPPI's comfort buffer down to floor_safe.
+      const double c_ref = queryStaticClearanceOdom(horizon_refs_[t].pos);
       horizon_safe_[t] = std::clamp(c_ref, floor_safe, cfg_.safe_distance_m);
     }
   }
@@ -310,7 +326,12 @@ TrajectorySetpointCmd MPPIController::computeCommand(
         total_cost += cfg_.w_path_align * vel_err.squaredNorm() * cfg_.dt_s;
 
         // Critic 3: ObstaclesCritic (GroundTruthMap static walls + STVL unmodeled beams + iSAM2 grid)
-        const double d_obs = queryClearanceOdom(pos);
+        // Subtract half a dynamic voxel + reach buffer on dynamic obstacles so discrete 8 cm voxels
+        // and MPPI's 0.21 m lethal radius keep prop tips (> 0.25 m) clear of unmodelled objects.
+        const double d_static = queryStaticClearanceOdom(pos);
+        const double dyn_margin = costmap_ ? (0.5 * costmap_->config().resolution_m + 0.01) : 0.05;
+        const double d_dyn = std::max(0.0, queryDynamicClearanceOdom(pos) - dyn_margin);
+        const double d_obs = std::min(d_static, d_dyn);
         if (d_obs <= cfg_.lethal_distance_m) {
           total_cost += cfg_.w_obstacles * (22.0 + 160.0 * (cfg_.lethal_distance_m - d_obs));
         } else if (d_obs < horizon_safe_[t]) {

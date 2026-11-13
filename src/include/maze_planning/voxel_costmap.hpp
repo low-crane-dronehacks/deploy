@@ -40,6 +40,7 @@ class VoxelCostmap {
   void setGroundTruthMap(std::shared_ptr<const GroundTruthMap> gt_map) {
     gt_map_ = std::move(gt_map);
   }
+  const VoxelCostmapConfig& config() const { return cfg_; }
   const GroundTruthMap& groundTruthMap() const { return *gt_map_; }
 
   /**
@@ -74,6 +75,11 @@ class VoxelCostmap {
    * min(GroundTruthMap static wall clearance, STVL dynamic obstacle clearance, iSAM2 DistanceGrid).
    */
   double clearance(const Eigen::Vector3d& p_map) const;
+
+  /**
+   * @brief Clearance (m) to dynamic obstacles only (STVL dynamic EDT and iSAM2 DistanceGrid).
+   */
+  double dynamicClearance(const Eigen::Vector3d& p_map) const;
 
   /**
    * @brief Combined clearance and unit spatial gradient nabla d(p).

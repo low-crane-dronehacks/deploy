@@ -154,6 +154,8 @@ class MPPIController {
 
  private:
   double queryClearanceOdom(const Eigen::Vector3d& p_odom) const;
+  double queryStaticClearanceOdom(const Eigen::Vector3d& p_odom) const;
+  double queryDynamicClearanceOdom(const Eigen::Vector3d& p_odom) const;
   MPPIControl clampControl(const MPPIControl& u) const;
   void smoothControlSequence();
   bool checkCorridorBlockedAhead(const VehicleKinematics& state_odom,
