@@ -122,7 +122,7 @@ and interpolates them to the depth header stamp.
 ## Spoof test: fake PX4 + depth rendered from a course scan
 
 No PX4, Gazebo or vehicle. `src/test/spoof_px4_depth.py` takes a scan of the course (.ply, aligned with
-`ego_planner/scripts/view_course_scan.py`), plans a route through its free space (launch mark, gates, pad), renders
+`ego_planner/scripts/view_course_scan.py`), plans a 3D A* route through the **joint** free space `min(d_scan_3d, d_cad_esdf_3d)` (guaranteed collision-free in both the physical `.ply` scan and the prebaked Course v3 CAD ESDF `config/arena_prior.bin`), renders
 OAK-like 16UC1 depth from it (z-buffered splats, noise 0.003 z^2, invalid edges, dropouts) and publishes a drifting
 fake PX4 estimate on `/fmu/out/vehicle_local_position_v1` + `vehicle_attitude`, with `/clock`. It scores the node's
 `~/odometry` against the truth and its `~/obstacles` against the scan. It publishes telemetry only, never a command.
@@ -140,15 +140,15 @@ ros2 launch src/test/spoof_isam2.launch.py ply:=... rviz:=false spoof_args:='--n
 RViz (fixed frame `map`, ENU above the NED world): scan (RGB), truth path green, spoofed PX4 path red, iSAM2 path
 blue, obstacle voxels orange, depth image. Drift knobs: `--yaw_drift_deg_s`, `--yaw_rw_deg`, `--scale`, `--pos_rw`.
 
-Results (2026-11-12, CAD prior derived strictly from `dronehacks-course-v3-obj.zip` -> `config/cad_prior_esdf.bin`, live depth sampled from `dronehacks-course-scan-2026-11-06.ply` where ~47% of walls differ 0.2–0.6 m from CAD, 14.6 m route in 36 s):
+Results (2026-11-13, CAD prior derived strictly from `dronehacks-course-v3-obj.zip` -> `config/cad_prior_esdf.bin`, live depth sampled from `dronehacks-course-scan-2026-11-06.ply` where ~47% of walls differ 0.2–0.6 m from CAD, 16.6 m joint-collision-free 3D route in 40 s):
 
 | estimator (`0.5 deg/s` yaw bias, `4%` scale, `1 cm/sqrt(s)` walk) | position rms / final | yaw rms / final |
 |---|---|---|
-| Spoofed PX4 VIO (`/fmu/out/*`) | `0.371 m / 0.683 m` | `8.68 deg / 15.52 deg` |
-| VIO + Standard ICP (`~/vio_icp_odometry`, no factor graph) | `0.337 m / 0.717 m` | `5.77 deg / 9.48 deg` |
-| **iSAM2 Factor Graph + CAD ESDF Prior (`~/odometry`)** | **`0.119 m / 0.281 m`** (`0.106 m` smoothed keyframes) | **`3.01 deg / 4.69 deg`** (`2.47 deg` smoothed keyframes) |
+| Spoofed PX4 VIO (`/fmu/out/*`) | `0.377 m / 0.753 m` | `9.81 deg / 18.30 deg` |
+| VIO + Standard ICP (`~/vio_icp_odometry`, no factor graph) | `0.621 m / 1.301 m` | `11.20 deg / 16.78 deg` |
+| **iSAM2 Factor Graph + CAD ESDF Prior (`~/odometry`)** | **`0.143 m / 0.295 m`** (`0.130 m` smoothed keyframes) | **`3.11 deg / 5.16 deg`** (`2.83 deg` smoothed keyframes) |
 
-Obstacle voxels (local window, ~12k voxels): median `0.048 m` from the scan surface (`79%` within 10 cm). Full corrected map (`~/map`, ~63.5k voxels after the route): median `0.031 m`, `86%` within 10 cm. On this 88-keyframe route, `CadPriorEsdf` accepted `23` alignments on faithful CAD geometry (`Barrier 1/2/3`, `M1`, `C2a`, `Tube oval`, `Floor`) and gated out `64` views dominated by shifted as-built walls (`M2`, `M3`, `A1`, `C1`), adding `0.1–3.3 ms` per keyframe (`13–27 ms` total keyframe update).
+Obstacle voxels (local window, ~16.8k voxels): median `0.054 m` from the scan surface (`73%` within 10 cm). Full corrected map (`~/map`, ~78k voxels after the route): median `0.038 m`, `82%` within 10 cm. On this 110-keyframe route, `CadPriorEsdf` accepted `32` alignments on faithful CAD geometry, gated out `64` views dominated by shifted as-built walls, and added `43` revisit loop closures (`13–30 ms` total keyframe update).
 
 ## Status (2026-11-07)
 

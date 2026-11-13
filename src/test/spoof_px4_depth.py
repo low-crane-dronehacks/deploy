@@ -35,6 +35,7 @@ import argparse
 import heapq
 import json
 import math
+import struct
 import sys
 import threading
 import time
@@ -142,83 +143,223 @@ def astar(clr, start, goal, r_min):
     return None
 
 
-def plan_route(pts, prior, args):
-    res, half = 0.05, prior.meta['arena']['arena_half_m']
-    clr, axis = clearance_map(pts, half, res, (args.alt - 0.5, args.alt + 0.5), 0.1)
-    cell = lambda p: tuple(int(round((v + half) / res)) for v in p)
-    pos = lambda c: np.array([axis[c[0]], axis[c[1]]])
+def load_cad_obstacle_esdf(prior_bin_path: Path):
+    """Load prebaked CAD obstacle clearance field (`EGOP` v1 in `config/arena_prior.bin`)."""
+    with open(prior_bin_path, 'rb') as fh:
+        magic, ver, nx, ny, nz, res_a, lox, loy, loz = struct.unpack('<4sIiiiffff', fh.read(36))
+        if magic != b'EGOP' or ver != 1:
+            raise ValueError(f'Unexpected header {magic!r} v{ver} in {prior_bin_path}')
+        egop = np.frombuffer(fh.read(), dtype=np.uint8).reshape(nx, ny, nz).astype(np.float32) / 200.0
+    lo_a = np.array([lox, loy, loz], dtype=np.float64)
 
-    def snap(p, radius=0.8):
-        c = cell(p)
-        r = int(radius / res)
-        i0, j0 = max(c[0] - r, 0), max(c[1] - r, 0)
-        win = clr[i0:c[0] + r + 1, j0:c[1] + r + 1]
-        k = np.unravel_index(int(np.argmax(win)), win.shape)
-        return (i0 + k[0], j0 + k[1])
+    def query(p_ned: np.ndarray, half: float = 3.0, net_margin: float = 0.12) -> np.ndarray:
+        pts_arr = np.atleast_2d(p_ned)
+        c = np.rint((pts_arr - lo_a) / res_a).astype(int)
+        c[:, 0] = np.clip(c[:, 0], 0, nx - 1)
+        c[:, 1] = np.clip(c[:, 1], 0, ny - 1)
+        c[:, 2] = np.clip(c[:, 2], 0, nz - 1)
+        d_obs = egop[c[:, 0], c[:, 1], c[:, 2]]
+        d_net = (half - net_margin) - np.maximum(np.abs(pts_arr[:, 0]), np.abs(pts_arr[:, 1]))
+        d_flr = np.maximum(0.0, -pts_arr[:, 2])
+        return np.minimum(np.minimum(d_obs, d_net), d_flr)
+
+    return query
+
+
+def astar3d(clr: np.ndarray, ax_z: np.ndarray, start: tuple[int, int, int], goal: tuple[int, int, int], r_min: float, z_nom: float):
+    sx, sy, sz = clr.shape
+    if clr[start] < r_min or clr[goal] < r_min:
+        return None
+    nbrs = [
+        (di, dj, dk, math.sqrt(di * di + dj * dj + 2.5 * dk * dk))
+        for di in (-1, 0, 1)
+        for dj in (-1, 0, 1)
+        for dk in (-1, 0, 1)
+        if not (di == 0 and dj == 0 and dk == 0)
+    ]
+    g = {start: 0.0}
+    parent = {start: None}
+    pq = [(0.0, start)]
+    closed = set()
+    while pq:
+        _, u = heapq.heappop(pq)
+        if u in closed:
+            continue
+        if u == goal:
+            out = []
+            while u is not None:
+                out.append(u)
+                u = parent[u]
+            return out[::-1]
+        closed.add(u)
+        gu = g[u]
+        for di, dj, dk, w in nbrs:
+            ni, nj, nk = u[0] + di, u[1] + dj, u[2] + dk
+            if not (0 <= ni < sx and 0 <= nj < sy and 0 <= nk < sz):
+                continue
+            cu = float(clr[ni, nj, nk])
+            if cu < r_min:
+                continue
+            v = (ni, nj, nk)
+            if v in closed:
+                continue
+            z_pen = 0.22 * abs(float(ax_z[nk]) - z_nom)
+            ng = gu + w * (1.0 + 2.4 * max(0.0, 0.58 - cu) + z_pen)
+            if ng < g.get(v, 1e18):
+                g[v] = ng
+                parent[v] = u
+                h = math.sqrt((goal[0] - ni) ** 2 + (goal[1] - nj) ** 2 + 1.5 * (goal[2] - nk) ** 2)
+                heapq.heappush(pq, (ng + h, v))
+    return None
+
+
+def plan_route(pts, prior, args):
+    """3D A* over the joint clearance field `min(d_scan_3d, d_cad_esdf_3d)` so the trajectory is guaranteed
+    collision-free in BOTH the physical .ply point cloud AND the prebaked Course v3 CAD ESDF."""
+    res, half = 0.05, float(prior.meta['arena']['arena_half_m'])
+    drone_r = float(prior.meta['arena']['collision_radius_m'])
+    z_nom = -float(args.alt)
+
+    # Build 3D KD-tree on above-floor physical scan obstacles + exact CAD obstacle ESDF query
+    obs_scan = pts[-pts[:, 2] >= 0.15]
+    obs_tree = cKDTree(obs_scan)
+    cad_query = load_cad_obstacle_esdf(args.prior)
+
+    ax_xy = np.round(np.arange(-half, half + 1e-6, res), 4)
+    ax_z = np.round(np.arange(-1.25, -0.45 + 1e-6, res), 4)
+    gn, ge, gz = np.meshgrid(ax_xy, ax_xy, ax_z, indexing='ij')
+    gp = np.column_stack([gn.ravel(), ge.ravel(), gz.ravel()])
+
+    d_scan_3d = obs_tree.query(gp)[0].reshape(gn.shape)
+    d_net_3d = (half - 0.12) - np.maximum(np.abs(gn), np.abs(ge))
+    d_flr_3d = np.maximum(0.0, -gz)
+    d_scan_3d = np.minimum(np.minimum(d_scan_3d, d_net_3d), d_flr_3d)
+    d_cad_3d = cad_query(gp, half=half, net_margin=0.12).reshape(gn.shape)
+    clr3d = np.minimum(d_scan_3d, d_cad_3d)
+
+    def idx_of(p_ned):
+        return (
+            int(np.clip(round((p_ned[0] + half) / res), 0, len(ax_xy) - 1)),
+            int(np.clip(round((p_ned[1] + half) / res), 0, len(ax_xy) - 1)),
+            int(np.clip(round((p_ned[2] - ax_z[0]) / res), 0, len(ax_z) - 1)),
+        )
+
+    def pos_of(c):
+        return np.array([ax_xy[c[0]], ax_xy[c[1]], ax_z[c[2]]], dtype=float)
+
+    def snap_point(p_ned, r_xy=0.65, r_z=0.18):
+        ci, cj, ck = idx_of(p_ned)
+        ri, rk = int(round(r_xy / res)), int(round(r_z / res))
+        i0, i1 = max(ci - ri, 0), min(ci + ri + 1, len(ax_xy))
+        j0, j1 = max(cj - ri, 0), min(cj + ri + 1, len(ax_xy))
+        k0, k1 = max(ck - rk, 0), min(ck + rk + 1, len(ax_z))
+        win = clr3d[i0:i1, j0:j1, k0:k1]
+        loc = np.unravel_index(int(np.argmax(win)), win.shape)
+        return (i0 + loc[0], j0 + loc[1], k0 + loc[2])
+
+    def snap_portal(g_meta):
+        a = np.array(g_meta['A_ned'], dtype=float)
+        b = np.array(g_meta['B_ned'], dtype=float)
+        z0 = -float(g_meta['alt_max_m']) + 0.08
+        z1 = -float(g_meta['alt_min_m']) - 0.08
+        if z0 > z1:
+            z0 = z1 = -float(g_meta['alt_nominal_m'])
+        best_c, best_val = None, -1.0
+        for s_p in np.linspace(0.15, 0.85, 29):
+            xy = (1.0 - s_p) * a + s_p * b
+            for z_p in np.linspace(z0, z1, 9):
+                c = idx_of([xy[0], xy[1], z_p])
+                val = float(clr3d[c]) - 0.08 * abs(s_p - 0.5) - 0.05 * abs(z_p - (-float(g_meta['alt_nominal_m'])))
+                if val > best_val and clr3d[c] >= max(0.24, drone_r + 0.04):
+                    best_val = val
+                    best_c = c
+        if best_c is None:
+            return snap_point(g_meta['center_ned'], r_xy=0.80, r_z=0.18)
+        return best_c
 
     lm = prior.meta['landmarks']
-    goals = [('launch', lm['launch_mark_ned'][:2])]
-    goals += [(g['name'], g['center_ned'][:2]) for g in sorted(prior.meta['gates'], key=lambda g: g['index'])]
-    goals += [('pad', lm['pad_center_ned'][:2])]
+    raw_goals = [('launch', np.array([lm['launch_mark_ned'][0], lm['launch_mark_ned'][1], z_nom]), snap_point([lm['launch_mark_ned'][0], lm['launch_mark_ned'][1], z_nom]))]
+    for g_meta in sorted(prior.meta['gates'], key=lambda g: g['index']):
+        raw_goals.append((g_meta['name'], np.array(g_meta['center_ned'], dtype=float), snap_portal(g_meta)))
+    raw_goals.append(('pad', np.array([lm['pad_center_ned'][0], lm['pad_center_ned'][1], z_nom]), snap_point([lm['pad_center_ned'][0], lm['pad_center_ned'][1], z_nom], r_xy=0.70)))
+
     cells = []
-    for name, p in goals:
-        c = snap(np.array(p))
-        print(f'  goal {name:13s} ({p[0]:+.2f}, {p[1]:+.2f}) -> ({pos(c)[0]:+.2f}, {pos(c)[1]:+.2f}), '
-              f'clearance {clr[c]:.2f} m')
+    for name, p_nom, c in raw_goals:
+        pw = pos_of(c)
+        print(f'  goal {name:13s} ({p_nom[0]:+.2f}, {p_nom[1]:+.2f}, {p_nom[2]:+.2f}) -> '
+              f'({pw[0]:+.2f}, {pw[1]:+.2f}, {pw[2]:+.2f}), joint clr {clr3d[c]:.2f} m '
+              f'(cad {d_cad_3d[c]:.2f}, scan {d_scan_3d[c]:.2f})')
         cells.append((name, c))
+
     path, cur = [cells[0][1]], cells[0][1]
     for name, c in cells[1:]:
         seg = None
-        for r_min in (args.clearance, 0.75 * args.clearance):
-            seg = astar(clr, cur, c, r_min)
+        for r_min in (args.clearance, max(0.25, 0.85 * args.clearance), max(0.22, drone_r + 0.02)):
+            seg = astar3d(clr3d, ax_z, cur, c, r_min, z_nom)
             if seg:
                 break
         if not seg:
-            print(f'  WARNING: no path to {name} with >= {0.75 * args.clearance:.2f} m clearance; skipped')
+            print(f'  WARNING: no joint CAD+scan path to {name} with >= {max(0.22, drone_r + 0.02):.2f} m clearance; skipped')
             continue
         path += seg[1:]
         cur = c
-    xy = np.array([pos(c) for c in path])
+    xyz = np.array([pos_of(c) for c in path])
 
-    def free_line(a, b, r_min):
-        n = max(2, int(np.linalg.norm(b - a) / 0.025))
-        for s in np.linspace(0, 1, n):
-            c = cell(a + s * (b - a))
-            if clr[c] < r_min:
-                return False
-        return True
+    def joint_min_line(a, b):
+        n = max(2, int(np.linalg.norm(b - a) / 0.02))
+        s_l = np.linspace(0.0, 1.0, n)[:, None]
+        pts_l = a + s_l * (b - a)
+        dc = cad_query(pts_l, half=half, net_margin=0.12)
+        ds = np.minimum(obs_tree.query(pts_l)[0], (half - 0.12) - np.maximum(np.abs(pts_l[:, 0]), np.abs(pts_l[:, 1])))
+        return float(min(dc.min(), ds.min()))
 
-    short, i = [xy[0]], 0                                                   # line-of-sight shortcut
-    while i < len(xy) - 1:
-        j = len(xy) - 1
-        while j > i + 1 and not free_line(xy[i], xy[j], args.clearance):
+    r_shortcut = max(args.clearance * 0.90, drone_r + 0.05)
+    r_smooth = max(drone_r + 0.03, 0.23)
+    short, i = [xyz[0]], 0
+    while i < len(xyz) - 1:
+        j = len(xyz) - 1
+        while j > i + 1 and joint_min_line(xyz[i], xyz[j]) < r_shortcut:
             j -= 1
-        short.append(xy[j])
+        short.append(xyz[j])
         i = j
     poly = np.array(short)
-    for _ in range(4):                                                      # Chaikin corner cutting
+    for _ in range(4):                                                      # Clearance-checked 3D Chaikin corner cutting
         q = [poly[0]]
         for a, b in zip(poly[:-1], poly[1:]):
-            q += [0.75 * a + 0.25 * b, 0.25 * a + 0.75 * b]
-        q.append(poly[-1])
+            p1, p2 = 0.75 * a + 0.25 * b, 0.25 * a + 0.75 * b
+            if joint_min_line(q[-1], p1) >= r_smooth and joint_min_line(p1, p2) >= r_smooth:
+                q += [p1, p2]
+            else:
+                if joint_min_line(q[-1], a) >= r_smooth:
+                    q.append(a)
+                q.append(b)
+        if np.linalg.norm(q[-1] - poly[-1]) > 1e-5:
+            q.append(poly[-1])
         poly = np.array(q)
+        keep_u = np.concatenate([[True], np.linalg.norm(np.diff(poly, axis=0), axis=1) > 1e-5])
+        poly = poly[keep_u]
+
     seg = np.linalg.norm(np.diff(poly, axis=0), axis=1)
-    s = np.concatenate([[0], np.cumsum(seg)])
-    ss = np.arange(0, s[-1], 0.02)
-    route = np.stack([np.interp(ss, s, poly[:, 0]), np.interp(ss, s, poly[:, 1])], 1)
-    c_along = np.array([clr[cell(p)] for p in route])
-    print(f'route: {s[-1]:.1f} m, min clearance to the scan {c_along.min():.2f} m '
-          f'(drone radius {prior.meta["arena"]["collision_radius_m"]} m)')
-    return route, clr, axis
+    s = np.concatenate([[0.0], np.cumsum(seg)])
+    ss = np.arange(0.0, s[-1], 0.02)
+    route = np.column_stack([np.interp(ss, s, poly[:, k]) for k in range(3)])
+
+    dc_r = cad_query(route, half=half, net_margin=0.12)
+    ds_r = np.minimum(obs_tree.query(route)[0], (half - 0.12) - np.maximum(np.abs(route[:, 0]), np.abs(route[:, 1])))
+    k_nom = int(np.argmin(np.abs(ax_z - z_nom)))
+    clr2d = clr3d[:, :, k_nom]
+    print(f'route: {s[-1]:.1f} m, min clearance CAD {dc_r.min():.2f} m / scan {ds_r.min():.2f} m '
+          f'(drone radius {drone_r} m)')
+    return route, clr2d, ax_xy
 
 
 def trajectory(route, args, dt):
-    """Time-parametrise the 2D route -> truth arrays at dt: t, p (NED), v, R (world NED <- body FRD)."""
+    """Time-parametrise the 3D route -> truth arrays at dt: t, p (NED), v, R (world NED <- body FRD)."""
     d = np.linalg.norm(np.diff(route, axis=0), axis=1)
     s = np.concatenate([[0], np.cumsum(d)])
     t1 = np.gradient(route, s, axis=0)
     t2 = np.gradient(t1, s, axis=0)
-    kappa = np.abs(t1[:, 0] * t2[:, 1] - t1[:, 1] * t2[:, 0])
+    kappa = np.linalg.norm(np.cross(t1, t2), axis=1)
     kappa = gaussian_filter1d(kappa, 5)
     v = np.minimum(args.speed, np.sqrt(args.lat_acc / np.maximum(kappa, 1e-6)))
     v[0] = v[-1] = 0.0
@@ -230,10 +371,11 @@ def trajectory(route, args, dt):
     hover0, hover1 = args.hover_s, 2.0
     t = np.arange(0, hover0 + tt[-1] + hover1, dt)
     tau = np.clip(t - hover0, 0, tt[-1])
-    n, e = np.interp(tau, tt, route[:, 0]), np.interp(tau, tt, route[:, 1])
-    alt = args.alt + args.alt_wiggle * np.sin(2 * np.pi * np.clip(t - hover0, 0, None) / 7.0)
-    p = np.stack([n, e, -alt], 1)
-    p = gaussian_filter1d(p, 0.15 / dt, axis=0, mode='nearest')
+    n = np.interp(tau, tt, route[:, 0])
+    e = np.interp(tau, tt, route[:, 1])
+    z_ned = np.interp(tau, tt, route[:, 2])
+    p = np.stack([n, e, z_ned], 1)
+    p = gaussian_filter1d(p, 0.12 / dt, axis=0, mode='nearest')
     vel = np.gradient(p, dt, axis=0)
     acc = gaussian_filter1d(np.gradient(vel, dt, axis=0), 0.1 / dt, axis=0, mode='nearest')
     head = np.unwrap(np.arctan2(t1[:, 1], t1[:, 0]))
