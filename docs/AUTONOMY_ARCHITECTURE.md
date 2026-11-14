@@ -20,7 +20,7 @@ flowchart TD
     end
 
     subgraph Priors["Arena Priors & Clearance Field"]
-        PriorBin["config/arena_prior.bin"] --> GridMap["GridMap 3D ESDF (grid_map.hpp)"]
+        PriorBin["assets/arena_prior.bin"] --> GridMap["GridMap 3D ESDF (grid_map.hpp)"]
         DepthCam["/camera/depth/image_raw"] -->|Live Updates| GridMap
     end
 
@@ -53,7 +53,7 @@ flowchart TD
 
 | Component | Path | Description |
 | :--- | :--- | :--- |
-| **Arena Prior Assets** | [`config/arena_prior.json`](file:///home/ejkaba/prj/deploy/config/arena_prior.json), [`config/arena_prior.bin`](file:///home/ejkaba/prj/deploy/config/arena_prior.bin) | Surveyed 3D locations of gates, window (+5 pt bonus), pad, and $123\times123\times62$ 5cm voxel ESDF. |
+| **Arena Prior Assets** | [`assets/arena_prior.json`](file:///home/ejkaba/prj/deploy/assets/arena_prior.json), [`assets/arena_prior.bin`](file:///home/ejkaba/prj/deploy/assets/arena_prior.bin) | Surveyed 3D locations of gates, window (+5 pt bonus), pad, and $123\times123\times62$ 5cm voxel ESDF. |
 | **Continuous ESDF** | [`ego_planner/include/ego_planner/grid_map.hpp`](file:///home/ejkaba/prj/deploy/ego_planner/include/ego_planner/grid_map.hpp), `src/grid_map.cpp` | Trilinear continuous obstacle clearance `getDistance()`, analytical gradient $\nabla d(p)$, and `getObstacleCost()`. |
 | **Global Planner Interface** | [`ego_planner/include/ego_planner/global_planner_interface.hpp`](file:///home/ejkaba/prj/deploy/ego_planner/include/ego_planner/global_planner_interface.hpp) | Abstract `GlobalPlannerBase` and working `BSplineGlobalPlanner`. |
 | **RRT\* Global Planner** | [`ego_planner/include/ego_planner/rrt_star_planner.hpp`](file:///home/ejkaba/prj/deploy/ego_planner/include/ego_planner/rrt_star_planner.hpp), `src/rrt_star_planner.cpp` | Complete RRT* scaffold with steering, neighborhood query, parent choice, and asymptotic rewiring. |
@@ -100,7 +100,7 @@ The RRT\* planner is located in [`ego_planner/include/ego_planner/rrt_star_plann
 ### How to complete / tune RRT\*:
 1. **Collision Oracle**: Use `grid_map.isCollisionFree(p, radius)` for point samples, and `grid_map.isSegmentClear(from, to, radius, step)` for edge validation.
 2. **Hierarchical / Segment Planning**:
-   Instead of running one giant 3D RRT* across the whole maze, plan segment-by-segment through the gate sequence defined in [`config/arena_prior.json`](file:///home/ejkaba/prj/deploy/config/arena_prior.json):
+   Instead of running one giant 3D RRT* across the whole maze, plan segment-by-segment through the gate sequence defined in [`assets/arena_prior.json`](file:///home/ejkaba/prj/deploy/assets/arena_prior.json):
    - Leg 0: Launch $\to$ Gate 0 entry
    - Leg 1: Gate 0 $\to$ Gate 1
    - Leg 2: Gate 1 $\to$ Gate 2
@@ -123,7 +123,7 @@ PX4's estimate with depth for the planner and MPPI. Do not publish its output to
 anything else PX4 fuses: it consumes PX4's estimate, so that would be a feedback loop.
 
 Its distance field reaches the maze MPPI today through `~/obstacles` (section 7). Next steps: publish a
-`map_ned -> odom_ned` correction (section 7, "Map alignment"), register depth against `config/arena_prior.bin` (prior-map factors, robust: the as-built arena
+`map_ned -> odom_ned` correction (section 7, "Map alignment"), register depth against `assets/arena_prior.bin` (prior-map factors, robust: the as-built arena
 differs), and connect its `MppiInput` / `DistanceGrid` to `MPPIController` / `GridMap`.
 
 ---

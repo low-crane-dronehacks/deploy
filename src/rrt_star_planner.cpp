@@ -12,7 +12,7 @@ RRTStarPlanner::RRTStarPlanner(const RRTStarConfig& cfg,
     : cfg_(cfg), gt_map_(std::move(gt_map)), costmap_(std::move(costmap)), rng_(1337) {
   if (!gt_map_) {
     gt_map_ = std::make_shared<GroundTruthMap>();
-    if (!gt_map_->loadFromBinary("config/course_groundtruth.bin")) {
+    if (!gt_map_->loadFromBinary("assets/course_groundtruth.bin")) {
       if (!gt_map_->loadFromObj("sitl/world/course.obj")) {
         gt_map_->initDefaultCourse();
       }

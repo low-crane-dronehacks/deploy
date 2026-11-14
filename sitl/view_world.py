@@ -2,7 +2,7 @@
 """Look at the Gazebo world (sitl/world) without Gazebo: course mesh, net shell, floor, spawn pose. VTK only.
 
     /usr/bin/python3 sitl/view_world.py                                   # interactive window
-    /usr/bin/python3 sitl/view_world.py --scan dronehacks-course-scan-2026-11-06.ply   # + the as-built scan
+    /usr/bin/python3 sitl/view_world.py --scan assets/dronehacks-course-scan-2026-11-06.ply   # + the as-built scan
     /usr/bin/python3 sitl/view_world.py --png /tmp/world.png              # render to a file instead
 
 Mouse: left = rotate, middle / shift+left = pan, wheel = zoom; 'r' resets the view, 'w'/'s' wireframe/surface, q quits.

@@ -1,9 +1,12 @@
 """Fused Classical Autonomy (A* + MPPI) + iSAM2 CAD-Prior Generalization Demo.
 
-Joins both halves of the C++ ROS 2 stack against the real physical course scan (.ply) with
-zero synthetic/arbitrary obstacles:
+Joins both halves of the C++ ROS 2 stack against the "real world" with zero synthetic/arbitrary
+obstacles. The real world is dronehacks-sim's as-built course mesh (scene:=, default
+assets/main_direction/course_asbuilt.npz: the as-built course the RL policy trains on, with its own checkpoints and launch mark; built by scripts/make_asbuilt_course.py. Previously
+them); scene:='' falls back to the old physical course scan (ply:=). The CAD prior the stack starts
+from (cad_prior:=, arena_prior.*) is the designed course either way:
   - sim_loopback_node (C++ QuadPlant): executes /control/cmd_vel closed-loop -> /truth/odometry
-  - classical_scan_bridge.py: renders live 640x400 OAK depth from the .ply scan + VIO-drifted
+  - classical_scan_bridge.py: renders live 640x400 OAK depth from the real world + VIO-drifted
     PX4 /fmu/out/* telemetry, and bridges iSAM2's smoothed odometry onto /odometry/local
   - isam2_depth_node (C++ GTSAM iSAM2 + PriorEsdfMap): corrects VIO drift against CAD prior +
     depth ICP, carves stale CAD walls, populates shifted real-world walls, and publishes
@@ -18,6 +21,8 @@ zero synthetic/arbitrary obstacles:
 Usage:
   python3 ../rerun/rerun_classical_demo.py --launch
   PYTHONNOUSERSITE=1 ros2 launch launch/classical_demo.launch.py
+  PYTHONNOUSERSITE=1 ros2 launch launch/classical_demo.launch.py scene:=$PWD/assets/real_world/course_w0scan_hi.npz
+  PYTHONNOUSERSITE=1 ros2 launch launch/classical_demo.launch.py scene:="''"    # old .ply scan world (or scene:=none)
 """
 from __future__ import annotations
 
@@ -40,6 +45,11 @@ from launch.event_handlers import OnProcessExit
 from launch.events import Shutdown
 from launch.substitutions import LaunchConfiguration
 
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+import real_world_scene  # noqa: E402  (launch mark of the scene: the as-built course shifts it)
+
 DEPLOY = Path(__file__).resolve().parents[1]
 MAP_FRAME = "map_ned"
 ODOM_FRAME = "odom_ned"
@@ -48,9 +58,10 @@ TRUTH_BASE_FRAME = "truth_base_link_frd"
 LAUNCH_MARK_NED = (0.9144, -2.5146, -0.78)
 
 
-def _course_goals(prior_json: Path, prefer_window: bool):
+def _course_goals(prior_json: Path, prefer_window: bool, scene: str = ""):
     with open(prior_json) as f:
         meta = json.load(f)
+    meta = real_world_scene.scene_arena_meta(scene or None, meta)   # as-built scene: its own checkpoint lines
     by_cp: dict[int, list[dict]] = {}
     for g in sorted(meta["gates"], key=lambda g: g["index"]):
         by_cp.setdefault(g["checkpoint"], []).append(g)
@@ -83,9 +94,14 @@ def _setup(context):
     if arm.lower() in ("1", "true", "yes"):
         raise RuntimeError("classical_demo is a simulation/scan demo; arm:=true is strictly forbidden")
 
+    scene = LaunchConfiguration("scene").perform(context).strip()
+    if scene.strip("'\"").lower() in ("", "none", "off", "ply"):
+        scene = ""  # a shell scene:='' arrives as the two quotes (a bare scene:= is rejected by ros2 launch)
     ply = LaunchConfiguration("ply").perform(context)
     if not ply:
-        ply = str(DEPLOY / "dronehacks-course-scan-2026-11-06.ply")
+        ply = str(DEPLOY / "assets" / "dronehacks-course-scan-2026-11-06.ply")
+    world_args = ["--scene", scene] if scene else ["--scene", "", ply]
+    world = f"scene={scene}" if scene else f"ply={ply}"
     cad_prior = LaunchConfiguration("cad_prior").perform(context)
     gt_map_path = LaunchConfiguration("groundtruth_map_path").perform(context)
     if not os.path.isabs(gt_map_path):
@@ -102,12 +118,14 @@ def _setup(context):
     bridge_extra = shlex.split(LaunchConfiguration("bridge_args").perform(context))
 
     frames = ["-p", f"map_frame:={MAP_FRAME}", "-p", f"odom_frame:={ODOM_FRAME}"]
-    flat, names, arena = _course_goals(DEPLOY / "config" / "arena_prior.json", prefer_window)
+    start_ne = real_world_scene.launch_mark_ned(scene or None, LAUNCH_MARK_NED[:2])
+    start = (float(start_ne[0]), float(start_ne[1]), LAUNCH_MARK_NED[2])
+    flat, names, arena = _course_goals(DEPLOY / "assets" / "arena_prior.json", prefer_window, scene)
 
     actions = [
         LogInfo(
             msg=f"classical_demo: speed={cruise_speed} mppi_samples={mppi_samples} "
-                f"prefer_window={prefer_window} ply={ply} arm=false"
+                f"prefer_window={prefer_window} {world} arm=false"
         ),
         # 1. Closed-loop C++ QuadPlant truth simulator
         ExecuteProcess(
@@ -120,9 +138,9 @@ def _setup(context):
                 "-p", f"base_frame:={TRUTH_BASE_FRAME}",
                 "-p", "odom_topic:=/truth/odometry",
                 "-p", "publish_map_odom_tf:=false",
-                "-p", f"start_x:={LAUNCH_MARK_NED[0]}",
-                "-p", f"start_y:={LAUNCH_MARK_NED[1]}",
-                "-p", f"start_z:={LAUNCH_MARK_NED[2]}",
+                "-p", f"start_x:={start[0]}",
+                "-p", f"start_y:={start[1]}",
+                "-p", f"start_z:={start[2]}",
                 "-p", "start_yaw:=0.0",
             ],
             cwd=str(DEPLOY),
@@ -156,7 +174,7 @@ def _setup(context):
         cmd=[
             "/usr/bin/python3",
             str(DEPLOY / "scripts" / "classical_scan_bridge.py"),
-            ply,
+            *world_args,
             "--pad_hold_s", str(pad_hold_s),
             "--max_duration_s", str(max_duration_s),
             *bridge_extra,
@@ -256,12 +274,15 @@ def _setup(context):
 def generate_launch_description():
     return LaunchDescription(
         [
-            DeclareLaunchArgument("ply", default_value=str(DEPLOY / "dronehacks-course-scan-2026-11-06.ply")),
-            DeclareLaunchArgument("cad_prior", default_value=str(DEPLOY / "config" / "cad_prior_esdf.bin")),
-            DeclareLaunchArgument("groundtruth_map_path", default_value="config/course_groundtruth.bin"),
+            DeclareLaunchArgument("scene", default_value=str(DEPLOY / "assets" / "main_direction" / "course_asbuilt.npz"),
+                                  description="real-world course mesh (.npz); '' = use the ply scan instead"),
+            DeclareLaunchArgument("ply", default_value=str(DEPLOY / "assets" / "dronehacks-course-scan-2026-11-06.ply"),
+                                  description="course scan (.ply), used when scene:=''"),
+            DeclareLaunchArgument("cad_prior", default_value=str(DEPLOY / "assets" / "cad_prior_esdf.bin")),
+            DeclareLaunchArgument("groundtruth_map_path", default_value="assets/course_groundtruth.bin"),
             DeclareLaunchArgument("arm", default_value="false"),
             DeclareLaunchArgument("mppi_samples", default_value="1024"),
-            DeclareLaunchArgument("cruise_speed_m_s", default_value="0.95"),
+            DeclareLaunchArgument("cruise_speed_m_s", default_value="0.6"),
             DeclareLaunchArgument("prefer_window", default_value="true"),
             DeclareLaunchArgument("start_delay_s", default_value="2.5"),
             DeclareLaunchArgument("pad_hold_s", default_value="2.5"),

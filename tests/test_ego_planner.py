@@ -74,7 +74,7 @@ def test_depth_raycast_updates_esdf():
 
 def test_arena_priors_and_slam_config():
     import json
-    prior_json_path = ROOT / "config" / "arena_prior.json"
+    prior_json_path = ROOT / "assets" / "arena_prior.json"
     assert prior_json_path.exists(), "arena_prior.json must exist"
     with open(prior_json_path) as f:
         prior = json.load(f)

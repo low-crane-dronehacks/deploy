@@ -11,8 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_groundtruth_map_encoding_and_clearance():
-    gt_bin = ROOT / "config" / "course_groundtruth.bin"
-    gt_json = ROOT / "config" / "course_groundtruth.json"
+    gt_bin = ROOT / "assets" / "course_groundtruth.bin"
+    gt_json = ROOT / "assets" / "course_groundtruth.json"
     assert gt_bin.exists(), "course_groundtruth.bin must exist"
     assert gt_json.exists(), "course_groundtruth.json must exist"
 

@@ -24,7 +24,7 @@ The estimator produces two things, both in PX4's local frame (NED world, FRD bod
 | `Pose3AttitudeFactor` | X(k) | PX4 roll / pitch (gravity-referenced; neither ICP nor odometry observes them absolutely) |
 | `BodyVelocityFactor` | X(k), V(k) | PX4 velocity in the body frame, so PX4's yaw drift does not leak in |
 | `KinematicFactor` | X(k-1), V(k-1), X(k), V(k) | p_k - p_(k-1) = dt (v_(k-1) + v_k) / 2 |
-| `PriorFactor<Pose3>` (CAD ESDF) | X(k) | projective point-to-CAD-plane registration of keyframe depth against `config/cad_prior_esdf.bin` (`CADP` v1 5 cm exact closest-point + triangle-normal ESDF built from `dronehacks-course-v3-obj.zip` via `scripts/build_cad_prior.py`), normal-gated (`cos >= 0.90`), distance-gated (`<= 0.14 m`), Cauchy M-estimated (`k = 0.04 m`), and Huber-wrapped in GTSAM so shifted as-built walls in the real course are rejected while faithful CAD geometry anchors global drift |
+| `PriorFactor<Pose3>` (CAD ESDF) | X(k) | projective point-to-CAD-plane registration of keyframe depth against `assets/cad_prior_esdf.bin` (`CADP` v1 5 cm exact closest-point + triangle-normal ESDF built from `assets/main_direction/dronehacks-course-v3-obj.zip` via `scripts/build_cad_prior.py`), normal-gated (`cos >= 0.90`), distance-gated (`<= 0.14 m`), Cauchy M-estimated (`k = 0.04 m`), and Huber-wrapped in GTSAM so shifted as-built walls in the real course are rejected while faithful CAD geometry anchors global drift |
 | `BodyPointFactor` | X(k), L(id) | a 3D landmark measured in depth, e.g. the landing-pad ring centre (`addFrame(..., obs)`; no detector here) |
 
 **Keyframes:** a new keyframe is taken after 0.25 m, 10 deg or 0.5 s of PX4 motion.
@@ -52,11 +52,11 @@ src/include/isam2_depth/   types, depth_icp (cloud + ICP), cad_prior (CADP v1 ES
 src/*.cpp                  core library: Eigen + GTSAM only, no ROS (includes VioIcpTracker baseline)
 src/ros/isam2_depth_node.cpp   ROS 2 node (built only when px4_msgs is found)
 src/test/                  synthetic test + scan-depth spoof benchmark (spoof_px4_depth.py, spoof_isam2.launch.py)
-scripts/build_cad_prior.py builds config/cad_prior_esdf.bin (CADP v1) + config/arena_prior.bin from dronehacks-course-v3.obj
+scripts/build_cad_prior.py builds assets/cad_prior_esdf.bin (CADP v1) + assets/arena_prior.bin from dronehacks-course-v3.obj
 ```
 
 **`PriorEsdfMap` (`src/include/isam2_depth/prior_esdf_map.hpp`, `src/prior_esdf_map.cpp`):**
-When `cad_prior_path` (`config/cad_prior_esdf.bin`) is provided, `DepthIsam2` seeds a 3D log-odds occupancy grid (`0.08 m` voxels, floor `-z < 0.16 m` cropped) from the Course v3 CAD ESDF at `t = 0`. As smoothed keyframes arrive (replaying from prior if loop-closure smoothing shifts an older pose `> 4 cm` / `> 2 deg`), 3D Amanatides-Woo DDA raycasting carves free space (`-l_free`) where CAD obstacles moved or are absent in the real world, and fuses occupied hits (`+l_occ`) on real surfaces, feeding the exact 3D EDT (`DistanceGrid`) for MPPI/planners.
+When `cad_prior_path` (`assets/cad_prior_esdf.bin`) is provided, `DepthIsam2` seeds a 3D log-odds occupancy grid (`0.08 m` voxels, floor `-z < 0.16 m` cropped) from the Course v3 CAD ESDF at `t = 0`. As smoothed keyframes arrive (replaying from prior if loop-closure smoothing shifts an older pose `> 4 cm` / `> 2 deg`), 3D Amanatides-Woo DDA raycasting carves free space (`-l_free`) where CAD obstacles moved or are absent in the real world, and fuses occupied hits (`+l_occ`) on real surfaces, feeding the exact 3D EDT (`DistanceGrid`) for MPPI/planners.
 
 **Latched `PointCloud2` topics on `isam2_depth_node`:**
 - `~/priors`: active CAD prior obstacle voxel centres (`prior_occ && log_odds > 0`), published immediately at startup (`t = 0`) and shrinking where depth rays clear empty space.
@@ -142,7 +142,7 @@ fake PX4 estimate on `/fmu/out/vehicle_local_position_v1` + `vehicle_attitude`, 
 ```bash
 source ~/isam2_ws/install/setup.bash                      # conda deactivated
 export ROS_DOMAIN_ID=87                                   # your own, so the fake PX4 topics stay local
-ros2 launch src/test/spoof_isam2.launch.py ply:=$PWD/dronehacks-course-scan-2026-11-06.ply      # + RViz
+ros2 launch src/test/spoof_isam2.launch.py ply:=$PWD/assets/dronehacks-course-scan-2026-11-06.ply      # + RViz
 ros2 launch src/test/spoof_isam2.launch.py ply:=... rviz:=false spoof_args:='--no_drift --csv /tmp/run.csv'
 /usr/bin/python3 src/test/spoof_px4_depth.py scan.ply --plan_png /tmp/route.png    # route + depth frames, no ROS
 ```
@@ -152,7 +152,7 @@ ros2 launch src/test/spoof_isam2.launch.py ply:=... rviz:=false spoof_args:='--n
 RViz (fixed frame `map`, ENU above the NED world): scan (RGB), truth path green, spoofed PX4 path red, iSAM2 path
 blue, obstacle voxels orange, depth image. Drift knobs: `--yaw_drift_deg_s`, `--yaw_rw_deg`, `--scale`, `--pos_rw`.
 
-Results (2026-11-13, CAD prior derived strictly from `dronehacks-course-v3-obj.zip` -> `config/cad_prior_esdf.bin`, live depth sampled from `dronehacks-course-scan-2026-11-06.ply` where ~47% of walls differ 0.2–0.6 m from CAD, 16.6 m joint-collision-free 3D route in 40 s):
+Results (2026-11-13, CAD prior derived strictly from `assets/main_direction/dronehacks-course-v3-obj.zip` -> `assets/cad_prior_esdf.bin`, live depth sampled from `assets/dronehacks-course-scan-2026-11-06.ply` where ~47% of walls differ 0.2–0.6 m from CAD, 16.6 m joint-collision-free 3D route in 40 s):
 
 | estimator (`0.5 deg/s` yaw bias, `4%` scale, `1 cm/sqrt(s)` walk) | position rms / final | yaw rms / final |
 |---|---|---|

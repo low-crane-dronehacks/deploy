@@ -45,7 +45,7 @@ class RRTStarPlannerNode : public rclcpp::Node {
         tf_buffer_(get_clock()),
         tf_listener_(tf_buffer_) {
     const std::string gt_path =
-        declare_parameter<std::string>("groundtruth_map_path", "config/course_groundtruth.bin");
+        declare_parameter<std::string>("groundtruth_map_path", "assets/course_groundtruth.bin");
     const std::string obj_path =
         declare_parameter<std::string>("course_obj_path", "sitl/world/course.obj");
     prefer_window_ = declare_parameter<bool>("prefer_window", true);

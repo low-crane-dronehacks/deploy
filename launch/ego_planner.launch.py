@@ -118,7 +118,7 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "enable_return_leg", default_value="false", description="true = fly return leg after pad"
             ),
-            DeclareLaunchArgument("prior_bin_path", default_value="config/arena_prior.bin"),
+            DeclareLaunchArgument("prior_bin_path", default_value="assets/arena_prior.bin"),
             DeclareLaunchArgument("fc_device", default_value="/dev/ttyTHS1"),
             OpaqueFunction(function=_setup),
         ]

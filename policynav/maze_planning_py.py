@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 
 DEPLOY_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_GT_MAP = DEPLOY_ROOT / "config" / "course_groundtruth.bin"
+DEFAULT_GT_MAP = DEPLOY_ROOT / "assets" / "course_groundtruth.bin"
 
 
 def _find_lib() -> Path:

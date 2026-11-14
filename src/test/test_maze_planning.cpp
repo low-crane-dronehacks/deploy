@@ -36,8 +36,8 @@ namespace {
 
 void testGroundTruthMapEncoding() {
   auto gt = std::make_shared<GroundTruthMap>();
-  const bool loaded_bin = gt->loadFromBinary("config/course_groundtruth.bin");
-  CHECK(loaded_bin, "GroundTruthMap failed to load config/course_groundtruth.bin");
+  const bool loaded_bin = gt->loadFromBinary("assets/course_groundtruth.bin");
+  CHECK(loaded_bin, "GroundTruthMap failed to load assets/course_groundtruth.bin");
   CHECK(gt->numOBBSlabs() == 14, "Expected 14 analytical OBB slabs, got %zu", gt->numOBBSlabs());
   CHECK(gt->numBoulders() == 5, "Expected 5 semi-ellipsoid boulders, got %zu", gt->numBoulders());
   CHECK(gt->numTriangles() >= 2000, "Expected >=2000 mesh triangles in BVH, got %zu", gt->numTriangles());
@@ -71,7 +71,7 @@ void testGroundTruthMapEncoding() {
 
 void testVoxelCostmapAndDisparityPunchThroughFMEA() {
   auto gt = std::make_shared<GroundTruthMap>();
-  gt->loadFromBinary("config/course_groundtruth.bin");
+  gt->loadFromBinary("assets/course_groundtruth.bin");
   VoxelCostmap costmap(VoxelCostmapConfig{}, gt);
 
   // FMEA Test 1: Disparity Punch-Through
@@ -98,7 +98,7 @@ void testVoxelCostmapAndDisparityPunchThroughFMEA() {
 
 void testRRTStarPlannerAndBsplineSmoothing() {
   auto gt = std::make_shared<GroundTruthMap>();
-  gt->loadFromBinary("config/course_groundtruth.bin");
+  gt->loadFromBinary("assets/course_groundtruth.bin");
   auto costmap = std::make_shared<VoxelCostmap>(VoxelCostmapConfig{}, gt);
 
   RRTStarPlanner rrt(RRTStarConfig{}, gt, costmap);
@@ -127,7 +127,7 @@ void testRRTStarPlannerAndBsplineSmoothing() {
 
 void testPathTransformerAndiSAM2ShiftFMEA() {
   auto gt = std::make_shared<GroundTruthMap>();
-  gt->loadFromBinary("config/course_groundtruth.bin");
+  gt->loadFromBinary("assets/course_groundtruth.bin");
   RRTStarPlanner rrt(RRTStarConfig{}, gt);
 
   PlannedPath global_map;
@@ -162,7 +162,7 @@ void testPathTransformerAndiSAM2ShiftFMEA() {
 
 void testMPPIRolloutsAndPillarEvasion() {
   auto gt = std::make_shared<GroundTruthMap>();
-  gt->loadFromBinary("config/course_groundtruth.bin");
+  gt->loadFromBinary("assets/course_groundtruth.bin");
   auto costmap = std::make_shared<VoxelCostmap>(VoxelCostmapConfig{}, gt);
 
   // Place an unmodeled vertical pole/pillar at [1.75, -2.5146] in the launch corridor
@@ -268,7 +268,7 @@ void testQuadPlantPx4VelocityStep() {
 // start is world-frame). Closed loop against the same plant at 20 Hz.
 void testMPPIHeadingOffsetClosedLoop() {
   auto gt = std::make_shared<GroundTruthMap>();
-  gt->loadFromBinary("config/course_groundtruth.bin");
+  gt->loadFromBinary("assets/course_groundtruth.bin");
   auto costmap = std::make_shared<VoxelCostmap>(VoxelCostmapConfig{}, gt);
   RRTStarPlanner rrt(RRTStarConfig{}, gt);
   const PlannedPath ref = rrt.smoothWithCubicBSpline(
@@ -315,7 +315,7 @@ void testMPPIHeadingOffsetClosedLoop() {
 // the vehicle is yawed 1.2 rad off the corridor.
 void testMPPIPillarSplitIsPathRelative() {
   auto gt = std::make_shared<GroundTruthMap>();
-  gt->loadFromBinary("config/course_groundtruth.bin");
+  gt->loadFromBinary("assets/course_groundtruth.bin");
   auto costmap = std::make_shared<VoxelCostmap>(VoxelCostmapConfig{}, gt);
   costmap->injectUnmodeledPillar(Eigen::Vector2d(1.75, -2.5146), 0.10, 1.65, 0.0);
   MPPIController mppi(MPPIConfig{}, QuadPlantParams{}, costmap);
@@ -381,7 +381,7 @@ void testControlMuxAndSafetyInterlocks() {
 // whole course from the first anchor; and re-delivering the same global path must not reset progress.
 void testRRTStarReplanContinuesFromProgress() {
   auto gt = std::make_shared<GroundTruthMap>();
-  gt->loadFromBinary("config/course_groundtruth.bin");
+  gt->loadFromBinary("assets/course_groundtruth.bin");
   RRTStarPlanner rrt(RRTStarConfig{}, gt);
   const Eigen::Vector3d launch(0.9144, -2.5146, -0.78);
 
@@ -428,7 +428,7 @@ void testRRTStarReplanContinuesFromProgress() {
 
 void testMPPICandidateRollouts() {
   auto gt = std::make_shared<GroundTruthMap>();
-  gt->loadFromBinary("config/course_groundtruth.bin");
+  gt->loadFromBinary("assets/course_groundtruth.bin");
   RRTStarPlanner rrt(RRTStarConfig{}, gt);
   PlannedPath path;
   rrt.planFullCourse(Eigen::Vector3d(0.9144, -2.5146, -0.78), true, false, path);
@@ -462,7 +462,7 @@ void testMPPICandidateRollouts() {
               c.min_cost, c.max_cost);
 }
 
-// Checkpoints from config/arena_prior.json (one per checkpoint, the window for checkpoint 3), then the pad.
+// Checkpoints from assets/arena_prior.json (one per checkpoint, the window for checkpoint 3), then the pad.
 std::vector<PlanGoal> courseGoalsFromArenaPrior() {
   auto g = [](const char* name, double cx, double cy, double cz, double ax, double ay, double bx, double by,
               double nx, double ny) {
@@ -490,7 +490,7 @@ std::vector<PlanGoal> courseGoalsFromArenaPrior() {
 
 void testAStarPlannerCourse() {
   auto gt = std::make_shared<GroundTruthMap>();
-  gt->loadFromBinary("config/course_groundtruth.bin");
+  gt->loadFromBinary("assets/course_groundtruth.bin");
   AStarConfig cfg{};
   AStarPlanner astar(cfg, gt);
   const auto goals = courseGoalsFromArenaPrior();
@@ -554,7 +554,7 @@ void testAStarPlannerCourse() {
 // wall at arena E = 0.135 here; sim_loopback (map == odom) cannot show it.
 void testMPPIGateAWithOdomOffset() {
   auto gt = std::make_shared<GroundTruthMap>();
-  gt->loadFromBinary("config/course_groundtruth.bin");
+  gt->loadFromBinary("assets/course_groundtruth.bin");
   auto costmap = std::make_shared<VoxelCostmap>(VoxelCostmapConfig{}, gt);
   AStarConfig acfg{};
   acfg.cruise_speed_m_s = 0.5;
@@ -599,7 +599,7 @@ void testMPPIGateAWithOdomOffset() {
 // stopped southward motion there. Same odom offset as SITL; MPPI must reach the window line.
 void testMPPIWindowWithOdomOffset() {
   auto gt = std::make_shared<GroundTruthMap>();
-  gt->loadFromBinary("config/course_groundtruth.bin");
+  gt->loadFromBinary("assets/course_groundtruth.bin");
   auto costmap = std::make_shared<VoxelCostmap>(VoxelCostmapConfig{}, gt);
   AStarConfig acfg{};
   acfg.cruise_speed_m_s = 0.5;

@@ -99,7 +99,7 @@ class GroundTruthMap {
   GroundTruthMap();
 
   /**
-   * @brief Load the CGTM v1 binary groundtruth map (config/course_groundtruth.bin).
+   * @brief Load the CGTM v1 binary groundtruth map (assets/course_groundtruth.bin).
    */
   bool loadFromBinary(const std::string& path);
 

@@ -45,7 +45,7 @@ ROOT = Path(__file__).resolve().parents[1]
 OBJECTS = [
     ('pole', 2.05, 1.05, 0.06, 1.60),      # leaving the maze towards gate A
     ('pole', 0.72, 2.30, 0.06, 1.60),      # after gate A, towards the tunnel
-    ('crate', -0.08, 2.29, 0.25, 1.20),    # tunnel exit side
+    ('crate', -0.08, 2.29, 0.15, 1.20),    # tunnel exit side (0.15 m: ~0.31 m clear either side in the 1.44 m tube)
     ('crate', -1.44, -1.36, 0.30, 1.00),   # run-in to the pad
 ]
 REACH = 0.25            # m, drone centre to prop tip (sitl/models/make_dronehacks_quad.py)
@@ -72,8 +72,8 @@ def surface_points(kind, n, e, size, height, step=0.02):
 
 
 def designed_walls(step=0.06):
-    """Wall cells of the designed course (config/arena_prior.bin distance grid) in the flight band, for cloud B."""
-    b = open(ROOT / 'config' / 'arena_prior.bin', 'rb').read()
+    """Wall cells of the designed course (assets/arena_prior.bin distance grid) in the flight band, for cloud B."""
+    b = open(ROOT / 'assets' / 'arena_prior.bin', 'rb').read()
     _, _, nx, ny, nz, res, lx, ly, lz = struct.unpack('<4sIiiiffff', b[:36])
     D = np.frombuffer(b[36:], np.uint8).reshape(nx, ny, nz) / 200.0
     i, j, k = np.nonzero(D < 0.6 * res)

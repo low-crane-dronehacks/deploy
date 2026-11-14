@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 
 DEPLOY_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_PRIOR_BIN = DEPLOY_ROOT / "config" / "arena_prior.bin"
+DEFAULT_PRIOR_BIN = DEPLOY_ROOT / "assets" / "arena_prior.bin"
 
 
 def _find_library() -> Path:

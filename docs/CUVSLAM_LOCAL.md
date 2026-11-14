@@ -73,7 +73,7 @@ at `vio.yaml`'s densities), and starts `cuvslam_lib_node` from the venv:
 ```bash
 source /opt/ros/jazzy/setup.bash && source ~/isam2_ws/install/setup.bash     # conda deactivated
 export ROS_DOMAIN_ID=87                                                      # your own
-ros2 launch src/test/spoof_isam2.launch.py ply:=$PWD/dronehacks-course-scan-2026-11-06.ply stereo:=true
+ros2 launch src/test/spoof_isam2.launch.py ply:=$PWD/assets/dronehacks-course-scan-2026-11-06.ply stereo:=true
 #   vslam_imu:=false        stereo-only (Multicamera) instead of Inertial
 #   cuvslam_venv:=<path>    if the venv is elsewhere
 #   spoof_args:='--stereo_hz 10 --imu_hz 200 --pixel_noise 2'

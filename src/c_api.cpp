@@ -47,7 +47,7 @@ MazePipelineHandle* maze_pipeline_create(const MazePipelineCConfig* cfg) {
 
   const char* gt_path = (cfg && cfg->groundtruth_map_path && cfg->groundtruth_map_path[0] != '\0')
                             ? cfg->groundtruth_map_path
-                            : "config/course_groundtruth.bin";
+                            : "assets/course_groundtruth.bin";
   if (!h->gt_map->loadFromBinary(gt_path)) {
     if (!h->gt_map->loadFromObj("sitl/world/course.obj")) {
       h->gt_map->initDefaultCourse();

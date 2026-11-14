@@ -218,7 +218,7 @@ void testMPPIController(const std::string& prior_path) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  std::string prior_path = "config/arena_prior.bin";
+  std::string prior_path = "assets/arena_prior.bin";
   if (argc > 1) {
     prior_path = argv[1];
   }

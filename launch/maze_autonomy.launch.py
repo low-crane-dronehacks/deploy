@@ -193,7 +193,7 @@ def _setup(context):
         raise RuntimeError(f"planner must be astar | rrt_star, got {planner!r}")
     if planner == "astar":
         prefer_window = LaunchConfiguration("prefer_window").perform(context).lower() == "true"
-        flat, names, arena = _course_goals(os.path.join(ROOT, "config", "arena_prior.json"), prefer_window)
+        flat, names, arena = _course_goals(os.path.join(ROOT, "assets", "arena_prior.json"), prefer_window)
         astar = ExecuteProcess(
             cmd=_node_cmd("pkg_maze_planning", "astar_planner_node")
             + ["--ros-args", "-p", f"use_sim_time:={sim_time_str}",
@@ -349,7 +349,7 @@ def generate_launch_description():
                                               "external = an estimator (iSAM2 / merged stack) publishes it"),
             DeclareLaunchArgument("map_odom_yaw", default_value="0.0",
                                   description="heading of PX4's local frame in the map frame (rad), static source only"),
-            DeclareLaunchArgument("groundtruth_map_path", default_value="config/course_groundtruth.bin"),
+            DeclareLaunchArgument("groundtruth_map_path", default_value="assets/course_groundtruth.bin"),
             DeclareLaunchArgument("fc_device", default_value="/dev/ttyTHS1"),
             OpaqueFunction(function=_setup),
         ]

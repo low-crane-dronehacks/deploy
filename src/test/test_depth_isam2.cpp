@@ -224,10 +224,10 @@ void testGraph(double yaw_drift = 0.02, double scale = 1.04) {
 
 void testPriorEsdfAdaptation() {
   std::string err;
-  auto cad = CadPriorEsdf::load("config/cad_prior_esdf.bin", &err);
-  if (!cad) cad = CadPriorEsdf::load("../../config/cad_prior_esdf.bin", &err);
-  if (!cad) cad = CadPriorEsdf::load("/home/evan/dronehacks/deploy/config/cad_prior_esdf.bin", &err);
-  CHECK(cad != nullptr, "failed to load config/cad_prior_esdf.bin: %s", err.c_str());
+  auto cad = CadPriorEsdf::load("assets/cad_prior_esdf.bin", &err);
+  if (!cad) cad = CadPriorEsdf::load("../../assets/cad_prior_esdf.bin", &err);
+  if (!cad) cad = CadPriorEsdf::load("/home/evan/dronehacks/deploy/assets/cad_prior_esdf.bin", &err);
+  CHECK(cad != nullptr, "failed to load assets/cad_prior_esdf.bin: %s", err.c_str());
   if (!cad) return;
 
   const PinholeCamera cam = camera();

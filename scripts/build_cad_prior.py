@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Build CAD-derived 3D ESDF priors directly from dronehacks-course-v3-obj.zip / .obj + .mtl.
+"""Build CAD-derived 3D ESDF priors directly from assets/main_direction/dronehacks-course-v3-obj.zip / .obj + .mtl.
 
 Imports each named CAD object (`g <piece>`) individually with its MTL diffuse colour (matching
 `course-sc.png`, including default [0.80, 0.80, 0.80] grey when a group omits `usemtl` as `Barrier 2`
 does in Onshape's export), converts ENU -> NED, and writes:
 
-  1. config/cad_prior_esdf.bin   ("CADP" v1) Closest-surface-point + analytical surface-normal 3D ESDF
+  1. assets/cad_prior_esdf.bin   ("CADP" v1) Closest-surface-point + analytical surface-normal 3D ESDF
                                  for iSAM2 point-to-CAD-plane prior registration (129x129x69 at 5 cm
                                  over [-3.20, 3.20]x[-3.20, 3.20]x[-3.20, 0.20] NED; 10 bytes/cell:
                                  int16 dx,dy,dz in 0.1 mm + int8 nx,ny,nz,flags).
-  2. config/arena_prior.bin      ("EGOP" v1) 123x123x62 @ 5 cm NED obstacle clearance grid derived from
+  2. assets/arena_prior.bin      ("EGOP" v1) 123x123x62 @ 5 cm NED obstacle clearance grid derived from
                                  the CAD structural obstacles (walls, barriers, tunnel, cradles, boulders).
 """
 from __future__ import annotations
@@ -320,10 +320,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--cad",
         type=Path,
-        default=DEPLOY_ROOT / "dronehacks-course-v3-obj.zip",
-        help="Path to dronehacks-course-v3-obj.zip or dronehacks-course-v3.obj",
+        default=DEPLOY_ROOT / "assets" / "main_direction" / "dronehacks-course-v3-obj.zip",
+        help="Path to assets/main_direction/dronehacks-course-v3-obj.zip or dronehacks-course-v3.obj",
     )
-    ap.add_argument("--out-dir", type=Path, default=DEPLOY_ROOT / "config")
+    ap.add_argument("--out-dir", type=Path, default=DEPLOY_ROOT / "assets")
     ap.add_argument("--esdf-res", type=float, default=0.05, help="CAD ESDF voxel size [m] (default 0.05)")
     args = ap.parse_args(argv)
 
@@ -386,7 +386,7 @@ def main(argv: list[str] | None = None) -> int:
         f.write(rec.tobytes(order="C"))
     print(f"Wrote {esdf_path} ({esdf_path.stat().st_size / (1024 * 1024):.2f} MiB)")
 
-    # 2. Rebuild config/arena_prior.bin ("EGOP" obstacle clearance) from CAD obstacle pieces
+    # 2. Rebuild assets/arena_prior.bin ("EGOP" obstacle clearance) from CAD obstacle pieces
     obs_objs = [o for o in objects if o.category == "obstacle"]
     tris_obs, nrms_obs = triangles_ned(obs_objs)
     res_a = 0.05

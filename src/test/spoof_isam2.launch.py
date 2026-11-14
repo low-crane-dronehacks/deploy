@@ -1,11 +1,17 @@
-"""isam2_depth_node fed by spoof_px4_depth.py (fake PX4 + depth rendered from a course scan), shown in RViz.
+"""isam2_depth_node fed by spoof_px4_depth.py (fake PX4 + depth rendered from the real-world course), shown in RViz.
+
+The real world is assets/main_direction/course_asbuilt.npz (the as-built course the RL policy trains on, scripts/make_asbuilt_course.py; scene:=...); scene:=none
+falls back to the old .ply course scan (ply:=..., default assets/dronehacks-course-scan-2026-11-06.ply). The node's CAD
+prior (cad_prior:=) is the designed course either way.
 
     source ~/isam2_ws/install/setup.bash          # px4_msgs + isam2_depth (docs/ISAM2.md)
-    ros2 launch src/test/spoof_isam2.launch.py ply:=$PWD/dronehacks-course-scan-2026-11-06.ply
-    ros2 launch src/test/spoof_isam2.launch.py ply:=... rviz:=false spoof_args:='--no_drift --csv /tmp/run.csv'
-    ros2 launch src/test/spoof_isam2.launch.py ply:=... map_save:=/tmp/isam2_map    # map at Ctrl-C
-    ros2 launch src/test/spoof_isam2.launch.py ply:=... stereo:=true    # + rendered stereo/IMU -> cuVSLAM
-                                                                        # (docs/CUVSLAM_LOCAL.md for the install)
+    ros2 launch src/test/spoof_isam2.launch.py
+    ros2 launch src/test/spoof_isam2.launch.py scene:=$PWD/assets/real_world/course_w0scan_hi.npz
+    ros2 launch src/test/spoof_isam2.launch.py scene:="''" ply:=$PWD/assets/dronehacks-course-scan-2026-11-06.ply  # or scene:=none
+    ros2 launch src/test/spoof_isam2.launch.py rviz:=false spoof_args:='--no_drift --csv /tmp/run.csv'
+    ros2 launch src/test/spoof_isam2.launch.py map_save:=/tmp/isam2_map    # map at Ctrl-C
+    ros2 launch src/test/spoof_isam2.launch.py stereo:=true    # + rendered stereo/IMU -> cuVSLAM
+                                                               # (docs/CUVSLAM_LOCAL.md for the install)
 
 No PX4, no vehicle, nothing is armed: the spoofer only publishes fake /fmu/out/* telemetry.
 Use a ROS_DOMAIN_ID of your own on a shared network, so the fake PX4 topics stay on this machine.
@@ -25,14 +31,26 @@ HERE = Path(__file__).resolve().parent
 DEPLOY = HERE.parents[1]
 
 
+def scene_arg(value: str) -> str:
+    """'' = no scene (use the ply). A shell `scene:=none` reaches the launch as the literal two quotes (and a bare
+    `scene:=` is rejected by ros2 launch), so quotes and none/off/ply count as empty too."""
+    v = value.strip()
+    return '' if v.strip('\'"').lower() in ('', 'none', 'off', 'ply') else v
+
+
 def setup(context):
-    ply = LaunchConfiguration('ply').perform(context)
-    if not ply:
-        default_ply = DEPLOY / 'dronehacks-course-scan-2026-11-06.ply'
-        if default_ply.exists():
-            ply = str(default_ply)
-        else:
-            raise RuntimeError('ply:=<path to the course scan .ply> is required')
+    scene = scene_arg(LaunchConfiguration('scene').perform(context))
+    if scene:
+        world = ['--scene', scene]
+    else:
+        ply = LaunchConfiguration('ply').perform(context)
+        if not ply:
+            default_ply = DEPLOY / 'assets' / 'dronehacks-course-scan-2026-11-06.ply'
+            if default_ply.exists():
+                ply = str(default_ply)
+            else:
+                raise RuntimeError("scene:=none needs ply:=<path to the course scan .ply>")
+        world = ['--scene', '', ply]
     extra = shlex.split(LaunchConfiguration('spoof_args').perform(context))
     stereo = LaunchConfiguration('stereo').perform(context).lower() in ('1', 'true', 'yes')
     if stereo and '--stereo' not in extra:
@@ -46,7 +64,7 @@ def setup(context):
     ]
     # start_delay_s: the spoofed flight (fake PX4 + depth) starts this long after iSAM2 and RViz, so RViz is up first
     spoof = ExecuteProcess(
-        cmd=['/usr/bin/python3', str(HERE / 'spoof_px4_depth.py'), ply, *extra],
+        cmd=['/usr/bin/python3', str(HERE / 'spoof_px4_depth.py'), *world, *extra],
         output='screen',
         additional_env={'PYTHONNOUSERSITE': '1'})
     delay = float(LaunchConfiguration('start_delay_s').perform(context))
@@ -77,8 +95,10 @@ def setup(context):
 
 def generate_launch_description():
     return LaunchDescription([
-        DeclareLaunchArgument('ply', default_value='', description='course scan (.ply)'),
-        DeclareLaunchArgument('cad_prior', default_value=str(DEPLOY / 'config' / 'cad_prior_esdf.bin'),
+        DeclareLaunchArgument('scene', default_value=str(DEPLOY / 'assets' / 'main_direction' / 'course_asbuilt.npz'),
+                              description="real-world course mesh (.npz); '' = use the ply scan instead"),
+        DeclareLaunchArgument('ply', default_value='', description="course scan (.ply), used when scene:=none"),
+        DeclareLaunchArgument('cad_prior', default_value=str(DEPLOY / 'assets' / 'cad_prior_esdf.bin'),
                               description='CAD-derived 3D ESDF prior (.bin, "" = disable prior factor)'),
         DeclareLaunchArgument('rviz', default_value='true'),
         DeclareLaunchArgument('start_delay_s', default_value='5.0',

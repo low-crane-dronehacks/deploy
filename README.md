@@ -11,7 +11,9 @@ ego_planner/   C++17 ROS 2 autonomy stack: GridMap 3D ESDF, Motion Primitives, B
                Quadrotor Dynamics, Global Planner Interface (RRT*), Local Controller Interface (MPPI),
                and Mission Manager state machine
 launch/        autonomy.launch.py (alias of ego_planner.launch.py) & policynav.launch.py
-config/        arena_prior.bin, arena_prior.json (surveyed 3D course anchors & 5cm voxel ESDF)
+assets/        maps & course models: arena_prior.{bin,json} (surveyed anchors, 5 cm clearance grid), cad_prior_esdf.bin,
+               course_groundtruth.{bin,json}, course_v3/ + dronehacks-course-v3-obj.zip (CAD), the .ply scan, real_world/
+config/        runtime config only: RViz layouts, oak.yaml, versions.yaml
 src/           C++ iSAM2 factor graph (depth ICP + PX4) -> state + distance field for an MPPI (docs/ISAM2.md)
 onboard/       VIO: cuVSLAM wrapper, EV bridge to PX4, health
 policynav/     policy node: depth + PX4 state -> Offboard velocity setpoints (NumPy export)

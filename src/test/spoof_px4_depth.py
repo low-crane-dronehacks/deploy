@@ -1,23 +1,30 @@
 #!/usr/bin/env python3
-"""Spoof PX4 + an OAK depth camera from a course scan, to run isam2_depth_node without PX4, Gazebo or a drone.
+"""Spoof PX4 + an OAK depth camera from the real-world course, to run isam2_depth_node without PX4, Gazebo or a drone.
 
 Nothing here talks to a real vehicle: it publishes fake PX4 *output* topics (/fmu/out/...) and never a command.
 
     # terminal 1 (or use spoof_isam2.launch.py, which starts all three):
     ros2 run isam2_depth isam2_depth_node --ros-args -p use_sim_time:=true
-    # terminal 2:
-    /usr/bin/python3 src/test/spoof_px4_depth.py dronehacks-course-scan-2026-11-06.ply
+    # terminal 2 (real world = assets/main_direction/course_asbuilt.npz by default):
+    /usr/bin/python3 src/test/spoof_px4_depth.py
+    /usr/bin/python3 src/test/spoof_px4_depth.py --scene assets/real_world/course_w0scan_hi.npz
+    /usr/bin/python3 src/test/spoof_px4_depth.py --scene '' assets/dronehacks-course-scan-2026-11-06.ply   # old .ply world
     # no ROS: plan the route + render sample depth frames to a PNG and exit
-    /usr/bin/python3 src/test/spoof_px4_depth.py scan.ply --plan_png /tmp/route.png
+    /usr/bin/python3 src/test/spoof_px4_depth.py --plan_png /tmp/route.png
 
 What it does:
-  scene   the .ply, aligned to the course NED frame with view_course_scan.py's transform (--yaw/--tx/--ty;
-          --auto_align recomputes it).
+  scene   the "real world": by default dronehacks-sim's simplified as-built mesh (--scene, scripts/real_world_scene.py;
+          already course NED: wall 0 + the window where the scan of the built course puts them), surface-sampled
+          into coloured points, one per --scene_spacing voxel (floor, walls, tunnel, boulders; not net or paint).
+          --scene '' = the old .ply scan instead, aligned to the course NED frame with view_course_scan.py's
+          transform (--yaw/--tx/--ty; --auto_align recomputes it). Below, "scan" means these points either way.
+          The CAD prior the node starts from (--prior, cad_prior_esdf.bin) is the designed course, not this world.
   route   A* through the scan's free space at flight height, visiting the launch mark, the gates in order and
           the pad (goals snapped to the clearest spot nearby; unreachable ones are skipped), shortcut + smoothed,
           flown at --speed with lateral-acceleration and acceleration limits, heading along the path, tilt from
           the acceleration (as a multirotor would). Starts with a hover so the graph can initialise.
-  depth   z-buffer splat of the scan into the 640x400 OAK camera (rendered at 160x100 and upsampled, 16UC1 mm,
+  depth   --scene: exact ray casting of the mesh + dronehacks-sim's OAK-D stereo model (scripts/mesh_depth.py); .ply:
+          z-buffer splat of the scan into the 640x400 OAK camera (rendered at 160x100 and upsampled, 16UC1 mm,
           0 = invalid), stereo-like noise sigma = k z^2, invalid occluding edges, random dropouts, range limits.
           TF base_link (FLU) -> camera optical frame, 10 cm ahead (same as the C++ synthetic test).
   PX4     vehicle_local_position_v1 + vehicle_attitude from the truth with VIO-like drift: yaw bias + random
@@ -52,6 +59,13 @@ sys.path.insert(0, str(DEPLOY_ROOT / 'ego_planner' / 'scripts'))
 sys.path.insert(0, str(DEPLOY_ROOT / 'scripts'))
 import view_course_scan as vcs  # noqa: E402  (load_ply, to_ned, align, apply, Prior)
 from build_cad_prior import load_cad_objects  # noqa: E402
+import real_world_scene  # noqa: E402  (deploy/scripts: the real-world course mesh)
+from mesh_depth import MeshDepthCamera, StereoDepthModel  # noqa: E402  (exact mesh depth + dronehacks-sim stereo)
+
+#: real-world mesh point spacing [m] (voxel size of sample_scene): ~474k points (the .ply has 558k at 1.8 cm median
+#: NN), ~45 ms per depth frame like the .ply, ~1 % pinholes vs a dense reference render (2 cm: 1.3 %, 28 ms;
+#: 1.25 cm: 0.6 %, 50 ms)
+SCENE_SPACING = 0.015
 
 G = 9.81
 # OAK-D S2-like camera (as src/test/test_depth_isam2.cpp) and its pose on the body
@@ -79,10 +93,46 @@ def load_obj_triangles(path: Path) -> np.ndarray:
     return v[f]
 
 
+def sample_scene(path, spacing: float = SCENE_SPACING):
+    """Real-world mesh -> scan-like points: dense random surface samples (spacing / 3) thinned to the one closest
+    to each ``spacing`` voxel's centre. Random (Poisson) samples alone have clumps and gaps (median NN ~0.44 x the
+    spacing) that the point-splat renderers show as pinholes; a voxel grid is even, like the voxel-filtered .ply."""
+    xyz, rgb = real_world_scene.RealWorldScene(path).sample_points(spacing / 3.0)
+    k = np.floor(xyz / spacing).astype(np.int64)
+    d = np.sum((xyz - (k + 0.5) * spacing) ** 2, axis=1)
+    order = np.lexsort((d, k[:, 2], k[:, 1], k[:, 0]))
+    ks = k[order]
+    first = np.r_[True, np.any(ks[1:] != ks[:-1], axis=1)]
+    keep = order[first]
+    return xyz[keep], rgb[keep]
+
+
 def load_scene(args):
+    """-> (points NED (N,3), rgb (N,3) in [0,1], cKDTree, splat spacing [m], arena Prior).
+
+    args.scene set: surface samples of the real-world mesh (already course NED, no alignment); else the .ply."""
+    prior = vcs.Prior(args.prior, args.prior.with_suffix('.json'))
+    scene = getattr(args, 'scene', '') or ''
+    scene = real_world_scene.resolve_scene('' if scene.strip().strip('\'"') == '' else scene)
+    args.scene_path = scene
+    prior.meta = real_world_scene.scene_arena_meta(scene, prior.meta)   # as-built scene: its checkpoints + launch mark
+    if scene is not None:
+        step = float(getattr(args, 'scene_spacing', SCENE_SPACING))
+        q, rgb = sample_scene(scene, step)
+        tree = cKDTree(q)
+        sample = q[np.random.default_rng(0).choice(len(q), min(20000, len(q)), replace=False)]
+        nn = float(np.median(tree.query(sample, k=2)[0][:, 1]))
+        # one point per voxel: the median NN distance is ~0.8 x the voxel; a splat sized from the NN distance alone
+        # leaves ~4 % pinholes (the walls are two-faced, so the back face shows through and the edge filter grows
+        # each pinhole to 3x3), one sized from the voxel ~1 %
+        spacing = max(nn, step)
+        print(f'scene: {scene.name}: {len(q)} points ({100 * step:.1f} cm voxels, median NN '
+              f'{100 * nn:.1f} cm), splat spacing {100 * spacing:.1f} cm')
+        return q, rgb, tree, spacing, prior
+    if args.ply is None:
+        raise SystemExit("--scene '' needs the course scan .ply as the positional argument")
     xyz, rgb = vcs.load_ply(args.ply)
     p = vcs.to_ned(xyz, args.up)
-    prior = vcs.Prior(args.prior, args.prior.with_suffix('.json'))
     if args.auto_align:
         best = vcs.align(p, prior, (0.3, 1.5), 'no')
         _, yaw, t = best[False]
@@ -144,7 +194,7 @@ def astar(clr, start, goal, r_min):
 
 
 def load_cad_obstacle_esdf(prior_bin_path: Path):
-    """Load prebaked CAD obstacle clearance field (`EGOP` v1 in `config/arena_prior.bin`)."""
+    """Load prebaked CAD obstacle clearance field (`EGOP` v1 in `assets/arena_prior.bin`)."""
     with open(prior_bin_path, 'rb') as fh:
         magic, ver, nx, ny, nz, res_a, lox, loy, loz = struct.unpack('<4sIiiiffff', fh.read(36))
         if magic != b'EGOP' or ver != 1:
@@ -226,7 +276,7 @@ def plan_route(pts, prior, args):
     obs_tree = cKDTree(obs_scan)
 
     ax_xy = np.round(np.arange(-half, half + 1e-6, res), 4)
-    ax_z = np.round(np.arange(-1.25, -0.45 + 1e-6, res), 4)
+    ax_z = np.round(np.arange(-1.45, -0.45 + 1e-6, res), 4)    # up to 1.45 m, so portal search can find a real window above the CAD prior heights
     gn, ge, gz = np.meshgrid(ax_xy, ax_xy, ax_z, indexing='ij')
     gp = np.column_stack([gn.ravel(), ge.ravel(), gz.ravel()])
 
@@ -265,14 +315,13 @@ def plan_route(pts, prior, args):
     def snap_portal(g_meta):
         a = np.array(g_meta['A_ned'], dtype=float)
         b = np.array(g_meta['B_ned'], dtype=float)
-        z0 = -float(g_meta['alt_max_m']) + 0.08
-        z1 = -float(g_meta['alt_min_m']) - 0.08
-        if z0 > z1:
-            z0 = z1 = -float(g_meta['alt_nominal_m'])
+        # Search the whole flyable band, not just the CAD prior's aperture heights: the real (scene) window can sit
+        # higher than the prior says. The nominal-height penalty keeps open gates at their usual altitude.
+        z0, z1 = float(ax_z[0]), float(ax_z[-1])
         best_c, best_val = None, -1.0
         for s_p in np.linspace(0.15, 0.85, 29):
             xy = (1.0 - s_p) * a + s_p * b
-            for z_p in np.linspace(z0, z1, 9):
+            for z_p in np.linspace(z0, z1, 21):
                 c = idx_of([xy[0], xy[1], z_p])
                 val = float(clr3d[c]) - 0.08 * abs(s_p - 0.5) - 0.05 * abs(z_p - (-float(g_meta['alt_nominal_m'])))
                 if val > best_val and clr3d[c] >= max(0.24, drone_r + 0.04):
@@ -282,7 +331,9 @@ def plan_route(pts, prior, args):
             return snap_point(g_meta['center_ned'], r_xy=0.80, r_z=0.18)
         return best_c
 
-    lm = prior.meta['landmarks']
+    lm = dict(prior.meta['landmarks'])
+    lm['launch_mark_ned'] = list(real_world_scene.launch_mark_ned(getattr(args, 'scene_path', None),
+                                                                  lm['launch_mark_ned'][:2]))
     raw_goals = [('launch', np.array([lm['launch_mark_ned'][0], lm['launch_mark_ned'][1], z_nom]), snap_point([lm['launch_mark_ned'][0], lm['launch_mark_ned'][1], z_nom]))]
     for g_meta in sorted(prior.meta['gates'], key=lambda g: g['index']):
         raw_goals.append((g_meta['name'], np.array(g_meta['center_ned'], dtype=float), snap_portal(g_meta)))
@@ -475,6 +526,45 @@ class Renderer:
         bad = edge | (self.rng.random(img.shape) < a.dropout) | (img < 0.35) | (img > a.max_depth)
         img[bad] = 0.0
         return np.repeat(np.repeat(img, self.s, 0), self.s, 1)
+
+
+class MeshRenderer(Renderer):
+    """Synthesized depth from the real-world MESH (not a point cloud): exact ray casting of every floor / wall /
+    tunnel / boulder triangle (``scripts/mesh_depth.py``) through the OAK-D S2 stereo model the RL policies are
+    trained with in dronehacks-sim (noisy quantised disparity, min range ~0.33 m, textureless holes, occlusion
+    shadows). Same camera, resolution (160x100 rendered, 640x400 out) and frame conventions as ``Renderer``.
+
+    ``render`` -> 16UC1-style metres (0 = invalid or no return); ``render_32f`` -> finite = hit, +inf = no return
+    within range (open sky / beyond max_depth), NaN = stereo dropout."""
+
+    def __init__(self, scene_path, args, rng):
+        super().__init__(np.zeros((0, 3)), 0.0, args, rng)
+        scene = real_world_scene.RealWorldScene(scene_path)
+        self.cam = MeshDepthCamera(scene.triangles(real_world_scene.DEPTH_GROUPS), self.w, self.h, self.f,
+                                   self.cx, self.cy, near=0.05, far=max(12.0, float(args.max_depth) + 1.0))
+        clean = getattr(args, 'stereo_model', 'oak') == 'off'
+        self.stereo = None if clean else StereoDepthModel(self.w, self.h, f_sensor=CAM_F, sensor_width_px=CAM_W, rng=rng)
+        print(f'depth: exact mesh ray casting of {len(self.cam.tri)} triangles from {Path(scene_path).name} '
+              f'({"clean" if clean else "dronehacks-sim OAK-D stereo model"}), {self.w}x{self.h} -> {CAM_W}x{CAM_H}')
+
+    def render_m(self, p_wb, R_wb):
+        R_wc = R_wb @ R_FRD_OPT
+        t_wc = p_wb + R_wb @ T_FRD_CAM
+        z = self.cam.render(R_wc, t_wc)
+        if self.stereo is not None:
+            z = self.stereo.apply(z)
+        z = z.copy()
+        z[np.isfinite(z) & (z > self.args.max_depth)] = np.inf
+        return z
+
+    def render(self, p_wb, R_wb):
+        z = self.render_m(p_wb, R_wb)
+        img = np.where(np.isfinite(z), z, 0.0).astype(np.float32)
+        return np.repeat(np.repeat(img, self.s, 0), self.s, 1)
+
+    def render_32f(self, p_wb, R_wb):
+        z = self.render_m(p_wb, R_wb)
+        return np.repeat(np.repeat(z.astype(np.float32), self.s, 0), self.s, 1)
 
 
 class StereoRenderer:
@@ -983,8 +1073,13 @@ def run_ros(args, pts, rgb, tree, traj, est, renderer, stereo=None):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('ply', type=Path)
-    ap.add_argument('--prior', type=Path, default=DEPLOY_ROOT / 'config' / 'arena_prior.bin')
+    ap.add_argument('ply', type=Path, nargs='?', default=None,
+                    help='course scan .ply (only used with --scene \'\')')
+    ap.add_argument('--scene', default=str(real_world_scene.DEFAULT_SCENE),
+                    help="real-world course mesh (.npz, course NED); '' = use the .ply scan instead")
+    ap.add_argument('--scene_spacing', type=float, default=SCENE_SPACING,
+                    help='real-world mesh point spacing (voxel) [m]')
+    ap.add_argument('--prior', type=Path, default=DEPLOY_ROOT / 'assets' / 'arena_prior.bin')
     ap.add_argument('--up', choices=('z', 'y'), default='z')
     ap.add_argument('--mirror', action='store_true', help='scan alignment (view_course_scan.py output)')
     ap.add_argument('--yaw', type=float, default=177.0)
@@ -993,7 +1088,7 @@ def main(argv=None):
     ap.add_argument('--auto_align', action='store_true', help='recompute the alignment instead (~10 s)')
     g = ap.add_argument_group('route')
     g.add_argument('--route_mode', choices=('scan', 'cad_prior'), default='scan',
-                   help="planning obstacle field: 'scan' = physical .ply scan free space (default), "
+                   help="planning obstacle field: 'scan' = real-world (--scene / .ply) free space (default), "
                         "'cad_prior' = CAD prior ESDF")
     g.add_argument('--alt', type=float, default=0.8, help='flight height [m]')
     g.add_argument('--alt_wiggle', type=float, default=0.1, help='height oscillation amplitude [m]')
@@ -1013,6 +1108,11 @@ def main(argv=None):
     g.add_argument('--edge_rel', type=float, default=0.15, help='invalidate jumps > this x depth in 3x3')
     g.add_argument('--dropout', type=float, default=0.02)
     g.add_argument('--max_depth', type=float, default=10.0)
+    g.add_argument('--depth_model', choices=('mesh', 'splat'), default='mesh',
+                   help='mesh: exact ray casting of the --scene mesh (default); splat: z-buffered surface points '
+                        '(the .ply path always splats)')
+    g.add_argument('--stereo_model', choices=('oak', 'off'), default='oak',
+                   help='mesh depth: dronehacks-sim OAK-D stereo effects (oak) or clean depth (off)')
     g = ap.add_argument_group('run')
     g.add_argument('--rtf', type=float, default=1.0, help='sim time / wall time')
     g.add_argument('--depth_hz', type=float, default=15.0)
@@ -1020,7 +1120,7 @@ def main(argv=None):
     g.add_argument('--seed', type=int, default=0)
     g.add_argument('--csv', type=Path, help='write truth / PX4 / iSAM2 rows here at the end')
     g.add_argument('--cad', type=lambda s: Path(s) if s else None,
-                   default=DEPLOY_ROOT / 'config' / 'course_v3' / 'dronehacks-course-v3.obj',
+                   default=DEPLOY_ROOT / 'assets' / 'course_v3' / 'dronehacks-course-v3.obj',
                    help="designed-course v3 CAD (.obj or .zip) shown on /spoof/cad_scene; '' = off")
     g.add_argument('--plan_png', type=Path, help='no ROS: save the route + sample depth frames and exit')
     g = ap.add_argument_group('stereo + IMU for cuVSLAM (docs/CUVSLAM_LOCAL.md)')
@@ -1045,7 +1145,10 @@ def main(argv=None):
     e = np.linalg.norm(est[0] - traj[1], axis=1)
     print(f'fake PX4 drift: final {e[-1]:.2f} m / {math.degrees(est[3][-1]):.1f} deg yaw '
           f'(bias {args.yaw_drift_deg_s} deg/s, scale {args.scale})')
-    renderer = Renderer(pts, spacing, args, rng)
+    if getattr(args, 'scene_path', None) is not None and args.depth_model == 'mesh':
+        renderer = MeshRenderer(args.scene_path, args, rng)
+    else:
+        renderer = Renderer(pts, spacing, args, rng)
     stereo = StereoRenderer(pts, rgb, spacing, args, rng) if args.stereo else None
     if args.plan_png:
         save_plan_png(args.plan_png, pts, rgb, clr, axis, route, traj, renderer)

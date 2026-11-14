@@ -34,7 +34,7 @@ namespace maze_planning {
 
 struct AStarConfig {
   double resolution_m{0.05};
-  double arena_half_m{3.0};           // config/arena_prior.json arena.arena_half_m
+  double arena_half_m{3.0};           // assets/arena_prior.json arena.arena_half_m
   double net_margin_m{0.0};           // extra margin to the outer net (GroundTruthMap already models it; the
                                       // spoof script needs 0.1 because a scan has no net)
   double flight_z_ned{-0.80};         // the plan is 2D at this height
@@ -92,6 +92,13 @@ class AStarPlanner {
   void rebuildClearance();
   void rebuildClearance(const isam2_depth::DistanceGrid* adapted_grid_map, double voxel_half_diag_m = 0.04);
 
+  // Limit rebuildClearance's elevated-opening altitude search to cells within radius_m of these gate lines (the
+  // window it is meant for). Empty (the default): every tight cell is searched, as before.
+  void setAltitudeSearchZones(std::vector<std::pair<Eigen::Vector2d, Eigen::Vector2d>> segments, double radius_m) {
+    alt_zones_ = std::move(segments);
+    alt_zone_radius_m_ = radius_m;
+  }
+
   // start -> goals in order. start_speed_m_s seeds the speed profile (0 on the ground / at a hover).
   AStarPlanResult plan(const Eigen::Vector3d& start_map, const std::vector<PlanGoal>& goals,
                        double start_speed_m_s = 0.0) const;
@@ -125,6 +132,9 @@ class AStarPlanner {
   int n_{0};
   std::vector<double> clr_;     // clearance per cell (m), row-major [i * n + j], i along x (north)
   std::vector<double> opt_z_;   // best local z_ned per cell (m) when 3D adapted grid reveals an elevated opening
+  std::vector<std::pair<Eigen::Vector2d, Eigen::Vector2d>> alt_zones_;   // window line(s) for the altitude search
+  double alt_zone_radius_m_{0.6};
+  bool inAltitudeZone(const Eigen::Vector2d& p) const;
 };
 
 }  // namespace maze_planning

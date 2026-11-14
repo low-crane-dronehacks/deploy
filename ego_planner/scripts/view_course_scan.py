@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Quick look: a surveyed point cloud (.ply, e.g. a Scaniverse scan) next to the course prior.
 
-    python3 ego_planner/scripts/view_course_scan.py dronehacks-course-scan-2026-11-06.ply
+    python3 ego_planner/scripts/view_course_scan.py assets/dronehacks-course-scan-2026-11-06.ply
     python3 ego_planner/scripts/view_course_scan.py scan.ply --save /tmp/scan_vs_prior.png
     python3 ego_planner/scripts/view_course_scan.py scan.ply --yaw 92 --tx 0.3 --ty -1.1   # manual alignment
     python3 ego_planner/scripts/view_course_scan.py scan.ply --3d
 
-The scan has an arbitrary frame, so it is aligned to the prior (config/arena_prior.bin, NED) in 2D:
+The scan has an arbitrary frame, so it is aligned to the prior (assets/arena_prior.bin, NED) in 2D:
   1. z-up scan -> z-down (x, y, z) -> (y, x, -z), with height measured from the scan's floor;
   2. for every yaw (1 deg steps; also mirrored, unless --mirror says otherwise), the wall band
      (--band, default 0.3-1.5 m) is rasterised at 5 cm and FFT-correlated with the prior's walls,
@@ -83,7 +83,7 @@ def load_ply(path: Path) -> tuple[np.ndarray, np.ndarray | None]:
 
 
 class Prior:
-    """config/arena_prior.bin (clearance grid, NED, node-centred at lo + res*i) + arena_prior.json."""
+    """assets/arena_prior.bin (clearance grid, NED, node-centred at lo + res*i) + arena_prior.json."""
 
     def __init__(self, bin_path: Path, json_path: Path):
         b = bin_path.read_bytes()
@@ -223,7 +223,7 @@ def thin(n: int, k: int, seed: int = 1) -> np.ndarray:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('ply', type=Path)
-    ap.add_argument('--prior', type=Path, default=DEPLOY_ROOT / 'config' / 'arena_prior.bin')
+    ap.add_argument('--prior', type=Path, default=DEPLOY_ROOT / 'assets' / 'arena_prior.bin')
     ap.add_argument('--up', choices=('z', 'y'), default='z', help='vertical axis of the scan (default z)')
     ap.add_argument('--band', type=float, nargs=2, default=(0.3, 1.5), metavar=('LO', 'HI'),
                     help='height band [m] used for the fit and the overlay (default 0.3 1.5)')

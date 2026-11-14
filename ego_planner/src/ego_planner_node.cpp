@@ -75,7 +75,7 @@ class EgoPlannerNode : public rclcpp::Node {
     auto win_pv = this->declare_parameter("prefer_window", rclcpp::ParameterValue(true));
     cfg.prefer_window = parseBoolParam(win_pv, true);
 
-    cfg.prior_bin_path = this->declare_parameter<std::string>("prior_bin_path", "config/arena_prior.bin");
+    cfg.prior_bin_path = this->declare_parameter<std::string>("prior_bin_path", "assets/arena_prior.bin");
     cfg.control_dt_s = this->declare_parameter<double>("control_dt", 0.10);
     cfg.stream_lead_s = this->declare_parameter<double>("stream_lead", 1.0);
     cfg.arm_wait_s = this->declare_parameter<double>("arm_wait", 15.0);

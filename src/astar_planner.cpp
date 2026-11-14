@@ -31,6 +31,16 @@ Eigen::Vector2d AStarPlanner::posOf(int cell) const {
                          -cfg_.arena_half_m + cfg_.resolution_m * (cell % n_));
 }
 
+bool AStarPlanner::inAltitudeZone(const Eigen::Vector2d& p) const {
+  if (alt_zones_.empty()) return true;
+  for (const auto& [a, b] : alt_zones_) {
+    const Eigen::Vector2d ab = b - a;
+    const double t = std::clamp((p - a).dot(ab) / std::max(1e-12, ab.squaredNorm()), 0.0, 1.0);
+    if ((p - (a + t * ab)).norm() <= alt_zone_radius_m_) return true;
+  }
+  return false;
+}
+
 void AStarPlanner::rebuildClearance() {
   rebuildClearance(nullptr, 0.04);
 }
@@ -62,7 +72,7 @@ void AStarPlanner::rebuildClearance(const isam2_depth::DistanceGrid* adapted_gri
       // If nominal flight altitude is tight/blocked (e.g. a physical window cut higher than the CAD window),
       // search safe flight altitudes z_ned in [-1.42, -0.55] m with a light altitude-deviation tie-breaker so
       // open corridors stay at flight_z_ned while elevated window centers are chosen at maximum 3D clearance!
-      if (d_obs < cfg_.clearance_m + 0.06) {
+      if (d_obs < cfg_.clearance_m + 0.06 && inAltitudeZone(p)) {
         double best_score = d_obs;
         for (double z_test = -1.42; z_test <= -0.55 + 1e-6; z_test += 0.04) {
           const double d_z = query_adapted(z_test);

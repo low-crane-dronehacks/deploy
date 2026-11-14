@@ -7,7 +7,7 @@
 // out  /plan/global_path                  nav_msgs/Path, map frame, latched, timed pose stamps, one per new plan
 //      /viz/groundtruth_map_cloud        sensor_msgs/PointCloud2 (map frame, latched)
 //
-// Goals (launch file, from config/arena_prior.json): `goals` = 9 doubles per goal
+// Goals (launch file, from assets/arena_prior.json): `goals` = 9 doubles per goal
 //   [cx, cy, cz, ax, ay, bx, by, nx, ny]   gate line A-B crossed along n; A = B = 0 for a plain goal (the pad)
 // and `goal_names`.
 #include <cmath>
@@ -35,7 +35,7 @@ namespace maze_planning {
 class AStarPlannerNode : public rclcpp::Node {
  public:
   AStarPlannerNode() : Node("astar_planner_node"), tf_buffer_(get_clock()), tf_listener_(tf_buffer_) {
-    const std::string gt_path = declare_parameter<std::string>("groundtruth_map_path", "config/course_groundtruth.bin");
+    const std::string gt_path = declare_parameter<std::string>("groundtruth_map_path", "assets/course_groundtruth.bin");
     map_frame_ = declare_parameter<std::string>("map_frame", "map_ned");
     odom_frame_ = declare_parameter<std::string>("odom_frame", "odom_ned");
     replan_min_interval_s_ = declare_parameter<double>("replan_min_interval_s", 1.5);
@@ -89,6 +89,12 @@ class AStarPlannerNode : public rclcpp::Node {
       gt_map_->initDefaultCourse();
     }
     planner_ = std::make_unique<AStarPlanner>(cfg, gt_map_);
+    // The elevated-opening altitude search is for the window: only near its gate line, elsewhere stay at flight_z.
+    std::vector<std::pair<Eigen::Vector2d, Eigen::Vector2d>> window_lines;
+    for (const auto& g : goals_) {
+      if (g.has_segment && g.name == "window") window_lines.emplace_back(g.seg_a, g.seg_b);
+    }
+    planner_->setAltitudeSearchZones(std::move(window_lines), 0.6);
 
     const rclcpp::QoS latched = rclcpp::QoS(1).reliable().transient_local();
     pub_path_ = create_publisher<nav_msgs::msg::Path>("/plan/global_path", latched);

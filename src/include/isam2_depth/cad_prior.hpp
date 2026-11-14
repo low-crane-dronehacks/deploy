@@ -1,6 +1,6 @@
 // CAD-derived 3D Closest-Point + Surface-Normal ESDF prior ("CADP" v1) for DepthIsam2.
 //
-// Built offline from `dronehacks-course-v3-obj.zip` (`scripts/build_cad_prior.py`). Each grid cell stores
+// Built offline from `assets/main_direction/dronehacks-course-v3-obj.zip` (`scripts/build_cad_prior.py`). Each grid cell stores
 // the exact closest point on the CAD triangle mesh (0.1 mm int16 offset from the cell centre) and its
 // analytical triangle normal (int8 unit vector). Online, keyframe depth clouds are registered against this
 // field with normal-gated, Cauchy M-estimated point-to-plane Gauss-Newton so that faithful CAD structures

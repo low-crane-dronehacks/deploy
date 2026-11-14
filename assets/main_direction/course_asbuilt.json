@@ -1,0 +1,268 @@
+{
+  "what": "nominal as-built course (dronehacks-sim perturb.apply_mods / build_variants, severity 0 -> range midpoints): the map the RL policy trains on",
+  "base": "course_w0scan2.npz",
+  "recipe": "dronehacks-sim recipes/ftw0_s330.sh",
+  "course_mods": "gapwalls:0.0:0.30;winh:wall0:0.30:0.60:1.20:1.55;move:wall1:-0.13:0.0:0;move:wall4:-0.08:-0.46:0;move:tunnel:0.10:-0.07:0;seg:wall2:0.75:0.98:-1.2:1.6;shift:wall1:0.30:0.46:north:mark;rot:wall3:40:50:south;place:wall5:north:0.05:0.3:-2.40:-2.10:wall3;span:wall6:wall1:-0.2:0.2:nw:-0.3:0.0",
+  "window_gate": [
+    -2.902,
+    -0.507,
+    -1.811,
+    -0.304
+  ],
+  "window_wall_heights_m": [
+    0.15000000596046448,
+    0.44999998807907104,
+    1.375,
+    1.7272000312805176
+  ],
+  "window_sill_m": 0.45,
+  "window_top_m": 1.375,
+  "wall_gap_under_m": 0.15,
+  "launch_mark_ned": [
+    1.2944,
+    -2.5146
+  ],
+  "pad_center_ned": [
+    -0.7925,
+    -2.0422
+  ],
+  "gates": [
+    {
+      "index": 0,
+      "name": "corridor_end",
+      "checkpoint": 0,
+      "is_window": false,
+      "A_ned": [
+        3.05,
+        -3.05
+      ],
+      "B_ned": [
+        1.8433,
+        -0.8407
+      ],
+      "tangent_ned": [
+        -0.47936,
+        0.877619
+      ],
+      "normal_ned": [
+        0.877619,
+        0.47936
+      ],
+      "length_m": 2.5174,
+      "center_ned": [
+        2.4466,
+        -1.9454,
+        -0.8
+      ],
+      "alt_min_m": 0.45,
+      "alt_max_m": 1.35,
+      "alt_nominal_m": 0.8,
+      "nominal_clearance_m": 0.4155
+    },
+    {
+      "index": 1,
+      "name": "gate_a",
+      "checkpoint": 1,
+      "is_window": false,
+      "A_ned": [
+        0.9044,
+        0.3048
+      ],
+      "B_ned": [
+        3.048,
+        0.3048
+      ],
+      "tangent_ned": [
+        1.0,
+        0.0
+      ],
+      "normal_ned": [
+        0.0,
+        1.0
+      ],
+      "length_m": 2.1436,
+      "center_ned": [
+        1.9762,
+        0.3048,
+        -0.8
+      ],
+      "alt_min_m": 0.45,
+      "alt_max_m": 1.35,
+      "alt_nominal_m": 0.8,
+      "nominal_clearance_m": 0.4392
+    },
+    {
+      "index": 2,
+      "name": "tunnel_exit",
+      "checkpoint": 2,
+      "is_window": false,
+      "A_ned": [
+        -0.2048,
+        1.5048
+      ],
+      "B_ned": [
+        -0.2048,
+        2.978
+      ],
+      "tangent_ned": [
+        0.0,
+        1.0
+      ],
+      "normal_ned": [
+        -1.0,
+        0.0
+      ],
+      "length_m": 1.4732,
+      "center_ned": [
+        -0.2048,
+        2.2414,
+        -0.8
+      ],
+      "alt_min_m": 0.55,
+      "alt_max_m": 1.15,
+      "alt_nominal_m": 0.8,
+      "nominal_clearance_m": 0.6886
+    },
+    {
+      "index": 3,
+      "name": "gate_b",
+      "checkpoint": 3,
+      "is_window": false,
+      "A_ned": [
+        -3.0204,
+        0.1568
+      ],
+      "B_ned": [
+        0.6396,
+        0.1568
+      ],
+      "tangent_ned": [
+        1.0,
+        0.0
+      ],
+      "normal_ned": [
+        0.0,
+        -1.0
+      ],
+      "length_m": 3.66,
+      "center_ned": [
+        -1.1904,
+        0.1568,
+        -0.8
+      ],
+      "alt_min_m": 0.45,
+      "alt_max_m": 1.35,
+      "alt_nominal_m": 0.8,
+      "nominal_clearance_m": 0.464
+    },
+    {
+      "index": 4,
+      "name": "window",
+      "checkpoint": 3,
+      "is_window": true,
+      "A_ned": [
+        -2.902,
+        -0.507
+      ],
+      "B_ned": [
+        -1.8059,
+        -0.3031
+      ],
+      "tangent_ned": [
+        0.983126,
+        0.182928
+      ],
+      "normal_ned": [
+        0.182928,
+        -0.983126
+      ],
+      "length_m": 1.1149,
+      "center_ned": [
+        -2.354,
+        -0.405,
+        -0.912
+      ],
+      "alt_min_m": 0.76,
+      "alt_max_m": 1.065,
+      "alt_nominal_m": 0.912,
+      "nominal_clearance_m": 0.4392
+    }
+  ],
+  "info": {
+    "moves": {
+      "wall1": [
+        [
+          [
+            1.0,
+            -0.0
+          ],
+          [
+            0.0,
+            1.0
+          ]
+        ],
+        [
+          0.4572,
+          -0.7366
+        ],
+        [
+          -0.13,
+          0.0
+        ]
+      ],
+      "wall4": [
+        [
+          [
+            1.0,
+            -0.0
+          ],
+          [
+            0.0,
+            1.0
+          ]
+        ],
+        [
+          -0.108,
+          -0.9754
+        ],
+        [
+          -0.08,
+          -0.46
+        ]
+      ],
+      "tunnel": [
+        [
+          [
+            1.0,
+            -0.0
+          ],
+          [
+            0.0,
+            1.0
+          ]
+        ],
+        [
+          0.4572,
+          2.3114
+        ],
+        [
+          0.1,
+          -0.07
+        ]
+      ]
+    },
+    "mark_shift": [
+      0.38,
+      0.0
+    ],
+    "spans": [
+      [
+        "wall6",
+        "wall1",
+        0.0,
+        "nw",
+        -0.15
+      ]
+    ]
+  }
+}

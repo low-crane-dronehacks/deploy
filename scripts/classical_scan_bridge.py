@@ -3,10 +3,12 @@
 
 Couples the closed-loop C++ QuadPlant (`sim_loopback_node` on `/truth/odometry`) with the
 C++ `isam2_depth_node` + classical autonomy stack (`astar_planner_node`, `path_transformer_node`,
-`mppi_controller_node`, `control_mux_node`) against the real physical course scan (.ply):
-  - Renders 640x400 16UC1 OAK depth (`/camera/depth/image_raw` + `/camera/depth/camera_info`)
-    from the TRUE drone pose against the physical `.ply` scan (reusing `Renderer` & `load_scene`
-    directly from `src/test/spoof_px4_depth.py`).
+`mppi_controller_node`, `control_mux_node`) against the "real world": by default dronehacks-sim's
+as-built course mesh (`--scene`, default `assets/main_direction/course_asbuilt.npz`, depth by exact mesh ray casting + the OAK-D stereo model, see `scripts/mesh_depth.py` /
+`scripts/real_world_scene.py`; already course NED), or with `--scene ''` the old physical scan (.ply):
+  - Renders 640x400 OAK depth (`/camera/depth/image_raw` + `/camera/depth/camera_info`)
+    from the TRUE drone pose against the real-world points (mesh surface samples or the aligned
+    `.ply`; reusing `Renderer` & `load_scene` directly from `src/test/spoof_px4_depth.py`).
   - Integrates realistic VIO drift onto incremental truth motion and publishes fake PX4 output
     telemetry (`/fmu/out/vehicle_local_position_v1` + `/fmu/out/vehicle_attitude`) for `isam2_depth_node`.
   - Bridges `isam2_depth_node`'s smoothed 50 Hz odometry (`/isam2_depth/odometry`) onto `/odometry/local`
@@ -39,9 +41,14 @@ from spoof_px4_depth import (  # noqa: E402
     R_ENU_NED,
     R_FRD_OPT,
     T_FRD_CAM,
+    SCENE_SPACING,
+    MeshRenderer,
     Renderer,
     load_scene,
+    real_world_scene,
 )
+
+DEFAULT_SCENE = real_world_scene.DEFAULT_SCENE
 
 PAD_CENTER_XY = np.array([-0.7925, -2.0422], dtype=float)
 LAUNCH_XY = np.array([0.9144, -2.5146], dtype=float)
@@ -56,8 +63,9 @@ class OpenSkyDepthRenderer(Renderer):
     """Point-splat depth renderer that distinguishes open-sky rays (+inf) from stereo dropouts (NaN).
 
     `Renderer` in `spoof_px4_depth.py` maps both stereo dropouts/occluding edges AND open-sky rays
-    (such as rays looking upward through the physical elevated window above the 1.73 m walls where
-    the `.ply` has no ceiling points) to `0`. In `isam2_depth_node`, `0` -> `NaN` is skipped by
+    (such as rays looking upward through the physical elevated window above the 1.73 m walls: neither
+    the `.ply` nor the real-world mesh has ceiling points; the mesh has no net or room beyond it either,
+    so level / upward rays out of the arena are open too) to `0`. In `isam2_depth_node`, `0` -> `NaN` is skipped by
     `PriorEsdfMap::extractRays()`, whereas `+inf` in `32FC1` means "no obstacle within range" and
     carves stale CAD wall voxels cleanly without inserting any fake endpoint hit (`AGENTS.md`).
     """
@@ -104,7 +112,7 @@ class OpenSkyDepthRenderer(Renderer):
         raw[pix[first]] = z[first]
         raw = raw.reshape(self.h, self.w)
 
-        # Distinguish genuine open-sky / far rays (entire 3x3 decimated block has zero .ply hits and
+        # Distinguish genuine open-sky / far rays (entire 3x3 decimated block has zero scene hits and
         # the world ray does not intersect the floor z_ned=0 within 5.5 m) from 1-px splat cracks.
         pad0 = np.pad(raw, 1, mode="edge")
         max3 = np.max(np.stack([pad0[dy : dy + self.h, dx : dx + self.w] for dy in range(3) for dx in range(3)]), axis=0)
@@ -137,10 +145,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "ply",
         nargs="?",
         type=Path,
-        default=DEPLOY_ROOT / "dronehacks-course-scan-2026-11-06.ply",
-        help="Aligned physical course scan (.ply)",
+        default=DEPLOY_ROOT / "assets" / "dronehacks-course-scan-2026-11-06.ply",
+        help="physical course scan (.ply), aligned with --yaw/--tx/--ty; only used with --scene ''",
     )
-    p.add_argument("--prior", type=Path, default=DEPLOY_ROOT / "config" / "arena_prior.bin")
+    p.add_argument(
+        "--scene",
+        default=str(DEFAULT_SCENE),
+        help="real-world course mesh (.npz, course NED, no alignment); '' = use the .ply scan instead",
+    )
+    p.add_argument("--scene_spacing", type=float, default=SCENE_SPACING,
+                   help="real-world mesh point spacing (voxel) [m]")
+    p.add_argument("--prior", type=Path, default=DEPLOY_ROOT / "assets" / "arena_prior.bin")
     p.add_argument("--up", default="z", choices=("x", "y", "z", "-x", "-y", "-z"))
     p.add_argument("--auto_align", action="store_true")
     p.add_argument("--mirror", action="store_true")
@@ -151,6 +166,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # OAK depth renderer parameters (matching spoof_px4_depth.py)
     p.add_argument("--depth_hz", type=float, default=15.0)
     p.add_argument("--max_depth", type=float, default=8.0)
+    p.add_argument("--depth_model", choices=("mesh", "splat"), default="mesh",
+                   help="mesh: exact ray casting of the --scene mesh + OAK-D stereo model (default); splat: surface points")
+    p.add_argument("--stereo_model", choices=("oak", "off"), default="oak",
+                   help="mesh depth: dronehacks-sim OAK-D stereo effects (oak) or clean depth (off)")
     p.add_argument("--noise_k", type=float, default=0.004)
     p.add_argument("--edge_rel", type=float, default=0.08)
     p.add_argument("--dropout", type=float, default=0.02)
@@ -175,12 +194,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    if not args.ply.exists():
+    if not args.scene.strip().strip("'\"") and not args.ply.exists():
         raise FileNotFoundError(f"Course scan .ply not found: {args.ply}")
 
     pts, rgb, _tree, spacing, _prior = load_scene(args)
     rng = np.random.default_rng(args.seed)
-    renderer = OpenSkyDepthRenderer(pts, spacing, args, rng)
+    if getattr(args, "scene_path", None) is not None and args.depth_model == "mesh":
+        renderer = MeshRenderer(args.scene_path, args, rng)        # exact mesh depth + dronehacks-sim stereo model
+    else:
+        renderer = OpenSkyDepthRenderer(pts, spacing, args, rng)
+    global LAUNCH_XY
+    LAUNCH_XY = real_world_scene.launch_mark_ned(getattr(args, "scene_path", None), LAUNCH_XY)
     obs_pts = pts[(-pts[:, 2] >= 0.16) & (-pts[:, 2] <= 1.70)]
     obs_tree = cKDTree(obs_pts)
 
@@ -251,7 +275,7 @@ def main(argv: list[str] | None = None) -> int:
         ]
     )
 
-    # Publish /spoof/scan once (latched) via zero-copy numpy buffer for colored .ply + ghost rescan visuals
+    # Publish /spoof/scan once (latched) via zero-copy numpy buffer: coloured real-world points + ghost rescan visuals
     sel = (np.abs(pts[:, 0]) < 3.6) & (np.abs(pts[:, 1]) < 3.6) & (-pts[:, 2] < 3.0)
     idx = np.where(sel)[0]
     idx = idx[np.random.default_rng(3).choice(len(idx), min(250_000, len(idx)), replace=False)]
@@ -413,6 +437,11 @@ def main(argv: list[str] | None = None) -> int:
             if not in_contact:
                 in_contact = True
                 contact_episodes += 1
+                q = obs_pts[obs_tree.query(p_ned)[1]]
+                node.get_logger().warn(
+                    f"contact #{contact_episodes}: drone ({p_ned[0]:+.2f},{p_ned[1]:+.2f},{p_ned[2]:+.2f}) within "
+                    f"{d_scan:.2f} m of the real world at ({q[0]:+.2f},{q[1]:+.2f},{q[2]:+.2f})"
+                )
         elif d_scan > 0.22:
             in_contact = False
 

@@ -2,8 +2,8 @@
 """Export the DroneHacks 2026 Arena Prior (3D distance/occupancy grid + gate/landmark metadata) for C++ EGO-Planner-V2.
 
 Writes:
-  config/arena_prior.json   Gate geometry, landmarks, sectors, and nominal route anchor waypoints (NED, metres)
-  config/arena_prior.bin    Compact 3D grid (123x123x62 at 5 cm resolution over [-3.05,3.05]x[-3.05,3.05]x[-3.05,0.0] NED)
+  assets/arena_prior.json   Gate geometry, landmarks, sectors, and nominal route anchor waypoints (NED, metres)
+  assets/arena_prior.bin    Compact 3D grid (123x123x62 at 5 cm resolution over [-3.05,3.05]x[-3.05,3.05]x[-3.05,0.0] NED)
                             storing uint8(clamp(round(exact_clearance_m * 200), 0, 255)) -> 5 mm precision, 916 KiB.
 """
 from __future__ import annotations
@@ -43,7 +43,7 @@ def main() -> None:
     # Quantize to uint8 in units of 0.005 m (5 mm), saturating at 255 (1.275 m)
     q_dist = np.clip(np.rint(dist * 200.0), 0, 255).astype(np.uint8)
 
-    out_dir = os.path.join(DEPLOY_ROOT, 'config')
+    out_dir = os.path.join(DEPLOY_ROOT, 'assets')
     os.makedirs(out_dir, exist_ok=True)
     bin_path = os.path.join(out_dir, 'arena_prior.bin')
     with open(bin_path, 'wb') as f:

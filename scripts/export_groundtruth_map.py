@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Export the DroneHacks 2026 Groundtruth Map Encoding for C++ RRT* and MPPI.
 
-Unlike config/arena_prior.bin (which is a pre-computed voxel ESDF), this script creates
+Unlike assets/arena_prior.bin (which is a pre-computed voxel ESDF), this script creates
 a new geometric + spatial-index groundtruth map encoding directly from the course mesh
 (sitl/world/course.obj or dronehacks-sim/assets/course.npz) and course rules:
 
@@ -12,12 +12,31 @@ a new geometric + spatial-index groundtruth map encoding directly from the cours
   3. 3D Morton (Z-Order) Bit-Packed Binary Occupancy Grid (1 bit per 5cm cell, NO pre-made ESDF).
   4. Gate apertures, sector polygons, launch mark, and landing pad metadata.
 
-Writes:
-  config/course_groundtruth.json   Human-readable geometric primitives, gates, and landmarks
-  config/course_groundtruth.bin    Compact binary groundtruth encoding (magic "CGTM" v1)
+Two sources:
+
+  (default)      the Course v3 CAD: hard-coded OBB slabs + dronehacks-sim ``assets/course.npz`` wall/tunnel
+                 triangles (needs a dronehacks-sim checkout at $DRONEHACKS_SIM). Writes the CAD prior files
+                   assets/course_groundtruth.json   Human-readable geometric primitives, gates, and landmarks
+                   assets/course_groundtruth.bin    Compact binary groundtruth encoding (magic "CGTM" v1)
+  --scene PATH   a real-world (as-built) scene npz, e.g. assets/real_world/course_w0scan2.npz (CAD v3 with wall 0
+                 + window re-laid where the scan puts them), read with scripts/real_world_scene.py (NumPy only).
+                 Every wall OBB slab is fitted to that mesh (the window wall split into pillars / sill / lintel
+                 around its aperture), boulders come from the mesh bodies, tunnel slabs stay the CAD ones (the
+                 tunnel is unchanged in the as-built scenes). Writes next to the scene by default:
+                   assets/real_world/<scene>_groundtruth.{json,bin}
+                 This is the sim's "real world" for maze_autonomy.launch.py sim_loopback:=true
+                 (groundtruth_map_path:=assets/real_world/<scene>_groundtruth.bin): A*, MPPI and RRT* load it.
+                 The CAD prior files in config/ are never written in this mode.
+
+Gates / landmarks / arena are copied from assets/arena_prior.json in both modes (the surveyed checkpoints the
+planner flies to; the as-built window aperture is recorded under "scene" in the json for reference).
+
+    python3 scripts/export_groundtruth_map.py                                          # CAD prior (config/)
+    python3 scripts/export_groundtruth_map.py --scene assets/real_world/course_w0scan2.npz   # real world
 """
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import os
@@ -30,7 +49,7 @@ SIM_DIR = os.environ.get("DRONEHACKS_SIM", "/home/ejkaba/prj/dronehacks-sim")
 if os.path.isdir(SIM_DIR):
     sys.path.insert(0, SIM_DIR)
 
-DEPLOY_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DEPLOY_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # deploy/
 
 
 def build_Analytical_primitives() -> tuple[list[dict], list[dict], dict]:
@@ -214,6 +233,128 @@ def extract_surface_triangles(boulders: list[dict]) -> tuple[np.ndarray, np.ndar
     return all_v, all_f
 
 
+# ---------------------------------------------------------------------------- real-world (as-built) scene
+WALL_HALF_THICKNESS_M = 0.0508
+TUNNEL_SLABS = ("tunnel_rib0", "tunnel_rib1", "tunnel_rib2", "tunnel_wall_post")
+
+
+def _load_real_world_module():
+    """scripts/real_world_scene.py (NumPy-only loader), imported from this script's directory."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import real_world_scene
+
+    return real_world_scene
+
+
+def _fit_wall_slabs(body: dict, z_eps: float = 1e-3) -> tuple[list[dict], dict | None]:
+    """OBB slab(s) of one straight wall body: PCA in XY gives the centreline / thickness / ends; vertices strictly
+    between floor and top are aperture corners, and if present the wall is split into left / right pillars, sill
+    and lintel around that aperture (the CSG cutout the CAD slabs encode). Returns (slabs, aperture or None)."""
+    v = np.asarray(body["verts"], dtype=np.float64)
+    xy = v[:, :2]
+    c = xy.mean(0)
+    _, _, vt = np.linalg.svd(xy - c, full_matrices=False)
+    t = vt[0]
+    if t[0] < -1e-9 or (abs(t[0]) <= 1e-9 and t[1] < 0):      # stable orientation: tangent towards +north
+        t = -t
+    n = np.array([-t[1], t[0]])
+    u = (xy - c) @ t
+    d = (xy - c) @ n
+    d_mid = 0.5 * (d.min() + d.max())
+    half_thick = 0.5 * float(d.max() - d.min())
+    base = c + d_mid * n
+    z_top, z_floor = float(v[:, 2].min()), float(v[:, 2].max())      # NED: top is the most negative z
+
+    def pt(uu: float) -> tuple[float, float]:
+        p = base + uu * t
+        return round(float(p[0]), 5), round(float(p[1]), 5)
+
+    def slab(name: str, u0: float, u1: float, z_min: float, z_max: float) -> dict:
+        (ax, ay), (bx, by) = pt(u0), pt(u1)
+        return {"name": name, "source_body": body["name"], "ax": ax, "ay": ay, "bx": bx, "by": by,
+                "half_thickness_m": round(half_thick, 5), "z_min_ned": round(z_min, 5) + 0.0, "z_max_ned": round(z_max, 5) + 0.0}
+
+    inner = (v[:, 2] > z_top + z_eps) & (v[:, 2] < z_floor - z_eps)
+    if not inner.any():
+        return [slab(body["name"], float(u.min()), float(u.max()), z_top, z_floor)], None
+    wu0, wu1 = float(u[inner].min()), float(u[inner].max())
+    lintel_z, sill_z = float(v[inner, 2].min()), float(v[inner, 2].max())
+    nm = body["name"]
+    slabs = [
+        slab(f"{nm}_left_pillar", float(u.min()), wu0, z_top, z_floor),
+        slab(f"{nm}_right_pillar", wu1, float(u.max()), z_top, z_floor),
+        slab(f"{nm}_window_sill", wu0, wu1, sill_z, z_floor),
+        slab(f"{nm}_window_lintel", wu0, wu1, z_top, lintel_z),
+    ]
+    (ax, ay), (bx, by) = pt(wu0), pt(wu1)
+    aperture = {
+        "body": nm,
+        "A_ned": [ax, ay], "B_ned": [bx, by],
+        "center_ned": [round(0.5 * (ax + bx), 5), round(0.5 * (ay + by), 5), round(0.5 * (sill_z + lintel_z), 5)],
+        "tangent_ned": [round(float(t[0]), 6), round(float(t[1]), 6)],
+        "normal_ned": [round(float(n[0]), 6), round(float(n[1]), 6)],
+        "width_m": round(wu1 - wu0, 4),
+        "sill_alt_m": round(-sill_z, 4), "lintel_alt_m": round(-lintel_z, 4),
+    }
+    return slabs, aperture
+
+
+def build_scene_primitives(scene) -> tuple[list[dict], list[dict], dict, dict | None]:
+    """(obb_slabs, boulders, tunnel_spec, window_aperture) of a RealWorldScene, NED metres."""
+    cad_slabs, _, cad_tunnel = build_Analytical_primitives()
+    bodies = scene.bodies(("wall", "tunnel", "boulder"))
+
+    obb_slabs: list[dict] = []
+    apertures = []
+    for b in (b for b in bodies if b["group"] == "wall"):
+        slabs, ap = _fit_wall_slabs(b)
+        obb_slabs += slabs
+        if ap is not None:
+            apertures.append(ap)
+    if len(apertures) != 1:
+        raise RuntimeError(f"{scene.path}: expected exactly one wall with a window aperture, found {len(apertures)}")
+    # The tunnel ribs / connector post are unchanged in the as-built scenes: keep the CAD slabs.
+    obb_slabs += [dict(s) for s in cad_slabs if s["name"] in TUNNEL_SLABS]
+
+    boulders = []
+    for b in (b for b in bodies if b["group"] == "boulder"):
+        v = b["verts"]
+        lo, hi = v.min(0), v.max(0)
+        boulders.append({"name": b["name"].replace("_", ""),
+                         "cx": round(float(0.5 * (lo[0] + hi[0])), 5), "cy": round(float(0.5 * (lo[1] + hi[1])), 5),
+                         "cz": round(float(hi[2]), 5),
+                         "rx": round(float(0.5 * (hi[0] - lo[0])), 5), "ry": round(float(0.5 * (hi[1] - lo[1])), 5),
+                         "rz": round(float(hi[2] - lo[2]), 5)})
+
+    tunnel_spec = dict(cad_tunnel)
+    tun = [b for b in bodies if b["group"] == "tunnel"]
+    if tun:
+        shell = max(tun, key=lambda b: float(np.prod(np.ptp(b["verts"], axis=0))))
+        lo, hi = shell["verts"].min(0), shell["verts"].max(0)
+        tunnel_spec.update({"x_min_ned": round(float(lo[0]), 4), "x_max_ned": round(float(hi[0]), 4),
+                            "y_min_ned": round(float(lo[1]), 4), "y_max_ned": round(float(hi[1]), 4),
+                            "z_top_ned": round(float(lo[2]), 4),
+                            "y_center_ned": round(float(0.5 * (lo[1] + hi[1])), 4)})
+    return obb_slabs, boulders, tunnel_spec, apertures[0]
+
+
+def extract_scene_surface_triangles(scene, boulders: list[dict]) -> tuple[np.ndarray, np.ndarray]:
+    """Exact wall + tunnel triangles of the scene plus the compact boulder hemisphere meshes (the scene's
+    boulders are ~15k-face rocks each; the C++ map models them analytically anyway)."""
+    wv, wf = scene.submesh(("wall", "tunnel"))
+    verts_list = [wv.astype(np.float32)]
+    faces_list = [wf.astype(np.int32)]
+    v_offset = len(wv)
+    for b in boulders:
+        bv, bf = make_boulder_hemisphere_mesh(b["cx"], b["cy"], b["rx"], b["ry"], b["rz"])
+        verts_list.append(bv)
+        faces_list.append(bf + v_offset)
+        v_offset += len(bv)
+    return np.concatenate(verts_list, axis=0), np.concatenate(faces_list, axis=0)
+
+
 def build_binary_occupancy_bitset(
     all_v: np.ndarray,
     all_f: np.ndarray,
@@ -221,6 +362,7 @@ def build_binary_occupancy_bitset(
     hi_ned: np.ndarray,
     res: float = 0.05,
     occ_shell_m: float = 0.04,
+    boulders: list[dict] | None = None,
 ) -> tuple[tuple[int, int, int], np.ndarray]:
     """Build a 1-bit-per-voxel binary occupancy bitset (NOT an ESDF) by Triangle-Box / surface rasterization."""
     shape = tuple(int(round((hi_ned[k] - lo_ned[k]) / res)) + 1 for k in range(3))
@@ -290,7 +432,8 @@ def build_binary_occupancy_bitset(
     ax_x = lo_ned[0] + res * np.arange(nx, dtype=np.float32)[:, None, None]
     ax_y = lo_ned[1] + res * np.arange(ny, dtype=np.float32)[None, :, None]
     ax_z = lo_ned[2] + res * np.arange(nz, dtype=np.float32)[None, None, :]
-    _, boulders, _ = build_Analytical_primitives()
+    if boulders is None:
+        _, boulders, _ = build_Analytical_primitives()
     for b in boulders:
         val = ((ax_x - b["cx"]) / b["rx"]) ** 2 + ((ax_y - b["cy"]) / b["ry"]) ** 2 + ((ax_z - b["cz"]) / b["rz"]) ** 2
         occ_bool |= (val <= 1.0) & (ax_z <= 0.0)
@@ -306,16 +449,39 @@ def build_binary_occupancy_bitset(
     return shape, words
 
 
-def main() -> None:
-    obb_slabs, boulders, tunnel_spec = build_Analytical_primitives()
-    all_v, all_f = extract_surface_triangles(boulders)
+def main(argv: list[str] | None = None) -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--scene", default="",
+                    help="real-world scene npz (e.g. assets/real_world/course_w0scan2.npz); default: the CAD course")
+    ap.add_argument("--out-dir", default="",
+                    help="output directory (default: assets/ for the CAD course, the scene's directory for --scene)")
+    args = ap.parse_args(argv)
+
+    cad_dir = os.path.realpath(os.path.join(DEPLOY_ROOT, "assets"))
+    scene_meta = None
+    if args.scene:
+        rws = _load_real_world_module()
+        scene_path = rws.resolve_scene(args.scene)
+        scene = rws.RealWorldScene(scene_path)
+        obb_slabs, boulders, tunnel_spec, window = build_scene_primitives(scene)
+        all_v, all_f = extract_scene_surface_triangles(scene, boulders)
+        out_dir = args.out_dir or str(scene_path.parent)
+        base = f"{scene_path.stem}_groundtruth"      # one map per scene: switching --scene never reuses a stale map
+        scene_meta = {"path": os.path.relpath(str(scene_path), DEPLOY_ROOT), "window_aperture": window}
+        if os.path.realpath(out_dir) == cad_dir:
+            raise SystemExit(f"refusing to overwrite the CAD prior {cad_dir}/course_groundtruth.* with a --scene map")
+    else:
+        obb_slabs, boulders, tunnel_spec = build_Analytical_primitives()
+        all_v, all_f = extract_surface_triangles(boulders)
+        out_dir = args.out_dir or cad_dir
+        base = "course_groundtruth"
 
     lo_ned = np.array([-3.05, -3.05, -3.05], dtype=np.float64)
     hi_ned = np.array([3.05, 3.05, 0.00], dtype=np.float64)
     res = 0.05
-    shape, bit_words = build_binary_occupancy_bitset(all_v, all_f, lo_ned, hi_ned, res=res)
+    shape, bit_words = build_binary_occupancy_bitset(all_v, all_f, lo_ned, hi_ned, res=res, boulders=boulders)
 
-    prior_json_path = os.path.join(DEPLOY_ROOT, "config", "arena_prior.json")
+    prior_json_path = os.path.join(DEPLOY_ROOT, "assets", "arena_prior.json")
     with open(prior_json_path, "r") as f:
         prior_meta = json.load(f)
 
@@ -324,7 +490,7 @@ def main() -> None:
         "magic": "CGTM",
         "version": 1,
         "frame": "NED",
-        "binary_file": "course_groundtruth.bin",
+        "binary_file": f"{base}.bin",
         "arena": prior_meta["arena"],
         "landmarks": prior_meta["landmarks"],
         "gates": prior_meta["gates"],
@@ -346,14 +512,16 @@ def main() -> None:
             "num_triangles": int(len(all_f)),
         },
     }
+    if scene_meta is not None:
+        gt_json["encoding_name"] += " [real-world scene]"
+        gt_json["scene"] = scene_meta
 
-    out_dir = os.path.join(DEPLOY_ROOT, "config")
     os.makedirs(out_dir, exist_ok=True)
-    json_out = os.path.join(out_dir, "course_groundtruth.json")
+    json_out = os.path.join(out_dir, f"{base}.json")
     with open(json_out, "w") as f:
         json.dump(gt_json, f, indent=2)
 
-    bin_out = os.path.join(out_dir, "course_groundtruth.bin")
+    bin_out = os.path.join(out_dir, f"{base}.bin")
     with open(bin_out, "wb") as f:
         # Header:
         #   magic "CGTM" (4B), version=1 (uint32),

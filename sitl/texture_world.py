@@ -14,7 +14,7 @@ course and net keep their original collision meshes and the ground keeps its col
 
 Texture coordinates: box projection per triangle (the two world axes across its dominant normal axis), in metres
 divided by each material's tile size, so the texture keeps its scale on every surface. The window is the wall
-group's diagonal panel along config/arena_prior.json's window line (it is not its own group in the course mesh).
+group's diagonal panel along assets/arena_prior.json's window line (it is not its own group in the course mesh).
 Why: the untextured course gave cuVSLAM almost nothing to track (2026-11-08 SITL takeoffs lost tracking).
 """
 from __future__ import annotations
